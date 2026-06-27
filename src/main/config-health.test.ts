@@ -37,6 +37,19 @@ vi.mock("fs", async () => {
   };
 });
 
+vi.mock("./utils", () => ({
+  profileHome: vi.fn(() => "/fake/home/.hermes"),
+  profilePaths: vi.fn((profile?: string) => ({
+    home: "/fake/home/.hermes",
+    envFile: "/fake/home/.hermes/.env",
+    configFile: "/fake/home/.hermes/config.yaml",
+    profile: profile || "default",
+  })),
+  safeWriteFile: vi.fn(),
+  getActiveProfileNameSync: vi.fn(() => undefined),
+  stripAnsi: vi.fn((value: string) => value),
+}));
+
 // Per-test vault map for the command-provider tests. We mutate this object
 // (assigning new properties) instead of reassigning, so the closure inside
 // the secrets mock always reads the current value. Initialized to empty;
