@@ -106,9 +106,21 @@ const mockedCustomEndpointKeyResolvable = vi.mocked(
   customEndpointKeyResolvable,
 );
 const mockedHasOAuthCredentials = vi.mocked(hasOAuthCredentials);
+const CREDENTIAL_ENV_KEYS = [
+  "API_SERVER_KEY",
+  "NANO_GPT_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_TOKEN",
+  "CUSTOM_API_KEY",
+  "OPENAI_API_KEY",
+] as const;
 
 describe("config-health audit — vault awareness", () => {
   beforeEach(() => {
+    for (const k of CREDENTIAL_ENV_KEYS) {
+      delete process.env[k];
+    }
+
     FAKE_VAULT = {};
     FAKE_ENV = {};
     mockedReadEnv.mockReset();
@@ -135,14 +147,7 @@ describe("config-health audit — vault awareness", () => {
 
   afterEach(() => {
     // Don't leak process.env from one test to the next.
-    for (const k of [
-      "API_SERVER_KEY",
-      "NANO_GPT_API_KEY",
-      "ANTHROPIC_API_KEY",
-      "ANTHROPIC_TOKEN",
-      "CUSTOM_API_KEY",
-      "OPENAI_API_KEY",
-    ]) {
+    for (const k of CREDENTIAL_ENV_KEYS) {
       delete process.env[k];
     }
   });
