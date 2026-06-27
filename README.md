@@ -1,25 +1,47 @@
-# 牧马城市 / Muma City
+# Muma City / 牧马城市
 
-牧马城市是基于 [Hermes Desktop](https://github.com/fathah/hermes-desktop) 改造的第一人称 3D 智能体工作空间。它把 Hermes Agent 的聊天、任务、记忆、技能、工具和网关能力放进一个可探索的办公室与城市环境里，目标是让“使用智能体工作”更像进入一款游戏。
+Muma City is an experimental MIT-licensed desktop workspace for AI agents. It builds on [Hermes Desktop](https://github.com/fathah/hermes-desktop) and explores a first-person 3D interface where chat, tasks, memory, skills, tools, and gateway integrations become part of an explorable office and city environment.
 
-> 当前项目仍处于实验开发阶段。3D 场景、角色动画、碰撞、交通、天气和游戏化 UI 都在快速迭代中，稳定性优先于一次性做完所有效果。
+The project is early, but actively maintained. The goal is to make local agent-based development easier to understand by turning agent workflows into visible places, objects, and routines instead of only panels and logs.
 
-## 当前方向
+![Muma City office preview](./previews/office.png)
 
-- 第一人称/第三人称 3D 工作空间
-- 可视化智能体、任务白板、记忆库、技能与工具映射
-- 办公室、停车场、餐厅、车行、公园和城市街区场景
-- 智能体行为、玩家移动、HUD、背包和角色动画实验
-- 基于 Hermes Agent 的本地/远程智能体连接能力
+## Why This Exists
 
-## 开发
+Most agent tools expose powerful capabilities through dense text UIs. Muma City experiments with a different shape:
+
+- an office and city workspace for working with agents;
+- visible rooms and boards for sessions, tasks, memories, skills, and tools;
+- first-person and third-person navigation experiments;
+- local and remote Hermes Agent connection workflows;
+- desktop packaging, release, and security work for agent-powered software.
+
+## Current Focus
+
+- First-person and third-person 3D workspace navigation
+- Visual task boards, memory views, skill maps, tool panels, and gateway screens
+- Office, parking lot, restaurant, vehicle shop, park, and city-block scene experiments
+- Player movement, HUD, inventory, character animation, and interaction prototypes
+- Safer desktop handling for local files, credentials, agent tools, and user context
+
+## Screenshots
+
+| Office | Chat | Gateway |
+| --- | --- | --- |
+| ![Office](./previews/office.png) | ![Chat](./previews/chat.png) | ![Gateway](./previews/gateway.png) |
+
+| Kanban | Memory | Skills |
+| --- | --- | --- |
+| ![Kanban](./previews/kanban.png) | ![Memory](./previews/memory.png) | ![Skills](./previews/skills.png) |
+
+## Development
 
 ```bash
 npm install
 npm run dev
 ```
 
-常用验证命令：
+Common validation commands:
 
 ```bash
 npm run typecheck
@@ -27,13 +49,23 @@ npm test
 npm run build:unpack
 ```
 
-## 开源说明
+## Project Status
 
-本项目继承 Hermes Desktop 的 MIT License。上游项目信息和第三方 3D/动画资产说明见：
+Muma City is an experimental preview. Core workflows are still changing, and the 3D scene, movement, collisions, traffic, weather, and game-style UI are being iterated in small steps. Stability, attribution, and safe local-agent behavior take priority over shipping every visual idea at once.
+
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the current development plan.
+
+## Release Notes
+
+The current preview is `v0.6.1`. See [docs/RELEASE_NOTES_v0.6.1.md](./docs/RELEASE_NOTES_v0.6.1.md) for the suggested GitHub release description.
+
+## Open Source And Attribution
+
+Muma City is a derivative work based on Hermes Desktop and keeps the upstream MIT License notice. Upstream project information and third-party 3D/animation asset notes are documented in:
 
 - [LICENSE](./LICENSE)
 - [NOTICE.md](./NOTICE.md)
 - `src/renderer/src/screens/Office/office3d/assets/THIRD_PARTY_ATTRIBUTION.json`
 - `src/renderer/src/screens/Office/office3d/assets/FIRST_PERSON_ATTRIBUTION.json`
 
-请不要提交 `.env`、API Key、私钥或本地个人数据。实验性大资源和临时下载内容应保留在 `work/` 等忽略目录中。
+Do not commit `.env` files, API keys, private keys, or local personal data. Experimental large assets and temporary downloads should stay in ignored directories such as `work/`.
