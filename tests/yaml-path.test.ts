@@ -69,6 +69,12 @@ describe("getYamlPath", () => {
     expect(getYamlPath('k: "honcho"', "k")).toBe("honcho");
   });
 
+  it("unescapes doubled single quotes inside YAML single-quoted scalars", () => {
+    expect(
+      getYamlPath("command: 'node ''helper path'' --list'", "command"),
+    ).toBe("node 'helper path' --list");
+  });
+
   it("strips trailing line comments", () => {
     expect(getYamlPath("model: gpt-4  # default", "model")).toBe("gpt-4");
   });
@@ -78,7 +84,7 @@ describe("getYamlPath", () => {
   });
 
   it("returns null when an intermediate parent isn't a map", () => {
-    // memory.provider.something doesn't exist — `provider: honcho` is a scalar
+    // memory.provider.something doesn't exist - `provider: honcho` is a scalar
     expect(
       getYamlPath(HERMES_LIKE_CONFIG, "memory.provider.something"),
     ).toBeNull();
