@@ -241,6 +241,7 @@ import {
   isAllowedExternalUrl,
   isAllowedWebviewUrl,
 } from "./security";
+import { rendererLoadFailureDataUrl } from "./renderer-load-fallback";
 import type { AppLocale } from "../shared/i18n/types";
 import {
   sshListInstalledSkills,
@@ -308,10 +309,28 @@ process.on("unhandledRejection", (reason) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
+const startupStartedAt = Date.now();
+const INITIAL_WINDOW_SHOW_DELAY_MS = 180;
 // Per-run abort handles, keyed by the renderer-minted runId. Multiple chats
 // run concurrently (background sessions / multi-agent), so starting a new run
 // must not abort siblings — only a re-send under the same runId does.
 const activeRuns = new Map<string, () => void>();
+
+function logStartup(stage: string, details?: unknown): void {
+  const elapsedMs = Date.now() - startupStartedAt;
+  if (details === undefined) {
+    console.info(`[STARTUP +${elapsedMs}ms] ${stage}`);
+    return;
+  }
+  console.info(`[STARTUP +${elapsedMs}ms] ${stage}`, details);
+}
+
+function focusMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
 
 function openExternalUrl(rawUrl: unknown): void {
   if (!isAllowedExternalUrl(rawUrl)) {
@@ -325,7 +344,17 @@ function openExternalUrl(rawUrl: unknown): void {
 }
 
 function createWindow(): void {
+  logStartup("create-window:start");
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    logStartup("create-window:reuse-existing");
+    focusMainWindow();
+    return;
+  }
+
   const rendererHtmlPath = join(__dirname, "../renderer/index.html");
+  let rendererHasLoaded = false;
+  let currentLoadFailed = false;
+  let initialShowTimer: ReturnType<typeof setTimeout> | null = null;
 
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -338,6 +367,9 @@ function createWindow(): void {
     // exceeds available vertical space.
     minHeight: 600,
     show: false,
+    transparent: false,
+    paintWhenInitiallyHidden: true,
+    backgroundColor: "#05070d",
     autoHideMenuBar: true,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : undefined,
     ...(process.platform === "darwin"
@@ -354,12 +386,31 @@ function createWindow(): void {
       webviewTag: true,
     },
   });
+  logStartup("create-window:created");
 
   mainWindow.on("ready-to-show", () => {
-    mainWindow!.show();
+    logStartup("window:ready-to-show", { rendererHasLoaded });
+    if (initialShowTimer) return;
+    initialShowTimer = setTimeout(() => {
+      initialShowTimer = null;
+      focusMainWindow();
+      logStartup("window:shown-initial");
+    }, INITIAL_WINDOW_SHOW_DELAY_MS);
+  });
+
+  mainWindow.on("closed", () => {
+    if (initialShowTimer) {
+      clearTimeout(initialShowTimer);
+      initialShowTimer = null;
+    }
+    mainWindow = null;
   });
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    logStartup("renderer:process-gone", {
+      reason: details.reason,
+      exitCode: details.exitCode,
+    });
     console.error(
       "[CRASH] Renderer process gone:",
       details.reason,
@@ -376,12 +427,136 @@ function createWindow(): void {
     },
   );
 
+  const rendererUrl =
+    is.dev && process.env["ELECTRON_RENDERER_URL"]
+      ? process.env["ELECTRON_RENDERER_URL"]
+      : null;
+  let rendererLoadAttempts = 0;
+  let rendererRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  const maxRendererLoadAttempts = 24;
+  let diagnosticUrl: string | null = null;
+  let loadingDiagnosticPage = false;
+
+  const showRendererLoadFailure = (reason: string): void => {
+    if (!mainWindow || mainWindow.isDestroyed() || loadingDiagnosticPage) {
+      return;
+    }
+
+    logStartup("renderer:show-diagnostic", {
+      reason,
+      attempts: rendererLoadAttempts,
+      mode: rendererUrl ? "dev" : "packaged",
+    });
+
+    if (rendererRetryTimer) {
+      clearTimeout(rendererRetryTimer);
+      rendererRetryTimer = null;
+    }
+
+    loadingDiagnosticPage = true;
+    currentLoadFailed = false;
+    rendererHasLoaded = true;
+    diagnosticUrl = rendererLoadFailureDataUrl({
+      target: rendererUrl ?? rendererHtmlPath,
+      reason,
+      attempts: rendererLoadAttempts,
+      maxAttempts: maxRendererLoadAttempts,
+      mode: rendererUrl ? "dev" : "packaged",
+    });
+
+    void mainWindow.loadURL(diagnosticUrl).catch((err: unknown) => {
+      logStartup("renderer:diagnostic-load-failed", err);
+      console.error("[LOAD FAIL] Unable to show diagnostic page:", err);
+      focusMainWindow();
+    });
+  };
+
+  const loadRenderer = (): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    rendererLoadAttempts += 1;
+    currentLoadFailed = false;
+    loadingDiagnosticPage = false;
+    logStartup("renderer:load:start", {
+      attempt: rendererLoadAttempts,
+      mode: rendererUrl ? "dev" : "packaged",
+      target: rendererUrl ?? rendererHtmlPath,
+    });
+
+    if (rendererUrl) {
+      void mainWindow.loadURL(rendererUrl).catch((err: unknown) => {
+        logStartup("renderer:load-url-rejected", err);
+        scheduleRendererLoadRetry((err as Error).message || String(err));
+      });
+    } else {
+      void mainWindow.loadFile(rendererHtmlPath).catch((err: unknown) => {
+        logStartup("renderer:load-file-rejected", err);
+        showRendererLoadFailure((err as Error).message || String(err));
+      });
+    }
+  };
+
+  const scheduleRendererLoadRetry = (reason: string): void => {
+    if (
+      !rendererUrl ||
+      !mainWindow ||
+      mainWindow.isDestroyed() ||
+      rendererLoadAttempts >= maxRendererLoadAttempts ||
+      rendererRetryTimer
+    ) {
+      if (rendererUrl && rendererLoadAttempts >= maxRendererLoadAttempts) {
+        showRendererLoadFailure(reason);
+      }
+      return;
+    }
+
+    const delayMs = Math.min(500 + rendererLoadAttempts * 250, 3000);
+    logStartup("renderer:retry-scheduled", {
+      reason,
+      nextAttempt: rendererLoadAttempts + 1,
+      maxAttempts: maxRendererLoadAttempts,
+      delayMs,
+    });
+    console.warn(
+      `[LOAD RETRY] Renderer not ready (${reason}); retry ${rendererLoadAttempts + 1}/${maxRendererLoadAttempts} in ${delayMs}ms`,
+    );
+    rendererRetryTimer = setTimeout(() => {
+      rendererRetryTimer = null;
+      loadRenderer();
+    }, delayMs);
+  };
+
   mainWindow.webContents.on(
     "did-fail-load",
-    (_event, errorCode, errorDescription) => {
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      logStartup("renderer:did-fail-load", {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      });
       console.error("[LOAD FAIL]", errorCode, errorDescription);
+      if (isMainFrame) {
+        if (diagnosticUrl && validatedURL === diagnosticUrl) {
+          currentLoadFailed = false;
+          return;
+        }
+        currentLoadFailed = true;
+        if (rendererUrl && validatedURL.startsWith(rendererUrl)) {
+          scheduleRendererLoadRetry(`${errorCode} ${errorDescription}`);
+        } else if (!rendererUrl) {
+          showRendererLoadFailure(`${errorCode} ${errorDescription}`);
+        }
+      }
     },
   );
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    logStartup("renderer:did-finish-load", { currentLoadFailed });
+    if (currentLoadFailed) return;
+    rendererHasLoaded = true;
+    focusMainWindow();
+    logStartup("window:shown");
+  });
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     openExternalUrl(details.url);
@@ -389,6 +564,10 @@ function createWindow(): void {
   });
 
   mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (diagnosticUrl && url === diagnosticUrl) {
+      return;
+    }
+
     if (
       isAllowedAppNavigationUrl(
         url,
@@ -463,11 +642,7 @@ function createWindow(): void {
     Menu.buildFromTemplate(template).popup();
   });
 
-  if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
-    mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-  } else {
-    mainWindow.loadFile(rendererHtmlPath);
-  }
+  loadRenderer();
 }
 
 function setupIPC(): void {
@@ -1055,7 +1230,7 @@ function setupIPC(): void {
                 .trim()
                 .slice(0, 80);
               new Notification({
-                title: "Hermes One",
+                title: "牧马城市",
                 body: preview || "Response ready",
               }).show();
             }
@@ -1067,7 +1242,7 @@ function setupIPC(): void {
             // Notify on error too if window not focused
             if (mainWindow && !mainWindow.isFocused()) {
               new Notification({
-                title: "Hermes One — Error",
+                title: "牧马城市 - Error",
                 body: error.slice(0, 100),
               }).show();
             }
@@ -2306,21 +2481,36 @@ if (process.env.ENABLE_CDP === "1") {
   );
 }
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    focusMainWindow();
+  });
+}
+
 app.whenReady().then(() => {
-  app.setName("Hermes One");
+  logStartup("app:ready");
+  app.setName("牧马城市");
   electronApp.setAppUserModelId("com.nousresearch.hermes");
   cleanupTempMediaFiles();
 
-  // Allow microphone access for the app's own renderer (voice input). Without
-  // a handler Electron denies getUserMedia by default. Scoped to the `media`
-  // permission only; everything else stays denied.
+  // Allow microphone access and the FPS workspace pointer lock for the app's
+  // own renderer. Everything else stays denied.
+  const allowedRendererPermissions = new Set([
+    "media",
+    "pointerLock",
+    "pointer-lock",
+  ]);
   session.defaultSession.setPermissionRequestHandler(
     (_wc, permission, callback) => {
-      callback(permission === "media");
+      callback(allowedRendererPermissions.has(permission));
     },
   );
-  session.defaultSession.setPermissionCheckHandler(
-    (_wc, permission) => permission === "media",
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) =>
+    allowedRendererPermissions.has(permission),
   );
 
   // In production, inject PostHog domains into the CSP response header.
@@ -2356,6 +2546,7 @@ app.whenReady().then(() => {
 
   buildMenu();
   setupIPC();
+  logStartup("main:ipc-ready");
   createWindow();
   setupUpdater();
 

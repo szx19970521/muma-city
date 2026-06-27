@@ -1,7 +1,7 @@
 export default {
-  title: "Welcome to Hermes",
+  title: "Welcome to Muma City",
   subtitle:
-    "Your self-improving AI assistant that runs locally on your machine. Private, powerful, and always learning.",
+    "Get work done through play. Bring agents, tasks, memory, and tools into one explorable city.",
   installIssueTitle: "Installation Issue",
   getStarted: "Get Started",
   retryInstall: "Retry Installation",

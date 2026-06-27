@@ -23,6 +23,8 @@ export function glbClone(
     const converted = mats.map((m) => {
       const src = m as THREE.Material & {
         color?: THREE.Color;
+        emissive?: THREE.Color;
+        emissiveIntensity?: number;
         map?: THREE.Texture | null;
       };
       const lit = new THREE.MeshStandardMaterial({
@@ -32,6 +34,11 @@ export function glbClone(
         metalness: 0.0,
         envMapIntensity: 0.85,
       });
+      lit.name = m.name;
+      if (src.emissive) {
+        lit.emissive.copy(src.emissive);
+        lit.emissiveIntensity = src.emissiveIntensity ?? 1;
+      }
       if (tintColor) lit.color.lerp(tintColor, 0.75);
       return lit;
     });
@@ -63,6 +70,8 @@ export function vehicleClone(
     const converted = mats.map((m) => {
       const src = m as THREE.Material & {
         color?: THREE.Color;
+        emissive?: THREE.Color;
+        emissiveIntensity?: number;
         map?: THREE.Texture | null;
       };
       const lit = new THREE.MeshStandardMaterial({
@@ -72,6 +81,11 @@ export function vehicleClone(
         metalness: 0.15,
         envMapIntensity: 0.9,
       });
+      lit.name = m.name;
+      if (src.emissive) {
+        lit.emissive.copy(src.emissive);
+        lit.emissiveIntensity = src.emissiveIntensity ?? 1;
+      }
       lit.color.getHSL(hsl);
       if (hsl.l > 0.22) lit.color.lerp(tintColor, 0.8);
       return lit;

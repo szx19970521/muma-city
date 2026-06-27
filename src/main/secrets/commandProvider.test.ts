@@ -1,7 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   parseSecretOutput,
   CommandSecretsProvider,
+  helperShellInvocation,
   unquoteDotenvValue,
 } from "./commandProvider";
 
@@ -13,6 +25,49 @@ vi.mock("../config", () => ({
 import { getConfigValue } from "../config";
 
 const mockedGetConfigValue = vi.mocked(getConfigValue);
+const HELPER_DIR = mkdtempSync(join(tmpdir(), "hermes-command-provider-"));
+let helperCounter = 0;
+
+function shellArg(value: string): string {
+  if (process.platform === "win32") {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function nodeSecretCommand(source: string): string {
+  const file = join(HELPER_DIR, `secret-helper-${helperCounter++}.cjs`);
+  writeFileSync(file, source);
+  return `${shellArg(process.execPath)} ${shellArg(file)}`;
+}
+
+function emitStdout(text: string): string {
+  return nodeSecretCommand(`process.stdout.write(${JSON.stringify(text)});`);
+}
+
+function echoSecretKey(): string {
+  return nodeSecretCommand(
+    `process.stdout.write(process.env.HERMES_SECRET_KEY || "");`,
+  );
+}
+
+function exitWith(code: number): string {
+  return nodeSecretCommand(`process.exit(${code});`);
+}
+
+function failWithStderr(): string {
+  return nodeSecretCommand(
+    `process.stderr.write("STDERR_SECRET_MARKER"); process.exit(7);`,
+  );
+}
+
+function hangPastTimeout(): string {
+  return nodeSecretCommand(`setTimeout(() => {}, 30_000);`);
+}
+
+afterAll(() => {
+  rmSync(HELPER_DIR, { recursive: true, force: true });
+});
 
 describe("parseSecretOutput", () => {
   it("returns a bare value (single-secret helper)", () => {
@@ -208,28 +263,28 @@ describe("CommandSecretsProvider", () => {
   });
 
   it("runs the configured command and returns its bare-value stdout", () => {
-    mockedGetConfigValue.mockReturnValue("printf 'resolved-value'");
+    mockedGetConfigValue.mockReturnValue(emitStdout("resolved-value"));
     expect(provider.get("SOME_KEY")).toBe("resolved-value");
   });
 
-  it("passes the requested key via $HERMES_SECRET_KEY, not the shell string", () => {
-    // The command echoes the env var; if the key were interpolated into the
-    // command string this would differ. It must arrive as data via the env.
-    mockedGetConfigValue.mockReturnValue('printf "%s" "$HERMES_SECRET_KEY"');
+  it("passes the requested key via HERMES_SECRET_KEY, not the shell string", () => {
+    // The helper reads the env var directly; if the key were interpolated into
+    // the command string this would differ. It must arrive as data via the env.
+    mockedGetConfigValue.mockReturnValue(echoSecretKey());
     expect(provider.get("MY_LOOKUP_KEY")).toBe("MY_LOOKUP_KEY");
   });
 
   it("is injection-safe: a hostile key name cannot execute", () => {
     // If the key were interpolated into the shell, this would try to run `id`.
-    // Because it's passed as data, the command just echoes the literal string.
-    mockedGetConfigValue.mockReturnValue('printf "%s" "$HERMES_SECRET_KEY"');
+    // Because it's passed as data, the helper reads the literal string.
+    mockedGetConfigValue.mockReturnValue(echoSecretKey());
     const hostile = '"; id; echo "';
     expect(provider.get(hostile)).toBe(hostile);
   });
 
   it("does not let a hostile key name run a side-effect command", () => {
     // A command that would only set the marker if the injected payload executed.
-    mockedGetConfigValue.mockReturnValue('printf "%s" "$HERMES_SECRET_KEY"');
+    mockedGetConfigValue.mockReturnValue(echoSecretKey());
     const hostile = "$(touch /tmp/hermes-injection-canary-should-not-exist)";
     const out = provider.get(hostile);
     // The literal string is echoed back; the subshell never ran.
@@ -238,14 +293,14 @@ describe("CommandSecretsProvider", () => {
 
   it("selects the requested key from a dotenv-dumping command", () => {
     mockedGetConfigValue.mockReturnValue(
-      "printf 'API_SERVER_KEY=aaa\\nANTHROPIC_TOKEN=bbb\\n'",
+      emitStdout("API_SERVER_KEY=aaa\nANTHROPIC_TOKEN=bbb\n"),
     );
     expect(provider.get("ANTHROPIC_TOKEN")).toBe("bbb");
     expect(provider.get("API_SERVER_KEY")).toBe("aaa");
   });
 
   it("returns null on a non-zero exit", () => {
-    mockedGetConfigValue.mockReturnValue("exit 7");
+    mockedGetConfigValue.mockReturnValue(exitWith(7));
     expect(provider.get("K")).toBeNull();
   });
 
@@ -253,7 +308,7 @@ describe("CommandSecretsProvider", () => {
     // Regression: execFileSync's err.message embeds the full command string
     // AND the helper's stderr — the catch blocks must log structured fields
     // (code/signal) only.
-    const cmd = "printf 'STDERR_SECRET_MARKER' >&2; exit 1";
+    const cmd = failWithStderr();
     mockedGetConfigValue.mockReturnValue(cmd);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -274,7 +329,7 @@ describe("CommandSecretsProvider", () => {
     // as the worst-case UI-freeze ceiling. A helper that blocks past the bound
     // MUST be killed and resolve to null — and do so WELL under the old 10s cap.
     // If COMMAND_TIMEOUT_MS is bumped back up (or the cap removed), this fails.
-    mockedGetConfigValue.mockReturnValue("sleep 30");
+    mockedGetConfigValue.mockReturnValue(hangPastTimeout());
     const started = Date.now();
     const out = provider.get("SLOW_KEY");
     const elapsed = Date.now() - started;
@@ -284,7 +339,7 @@ describe("CommandSecretsProvider", () => {
   });
 
   it("list() also enforces the timeout bound on a slow helper", () => {
-    mockedGetConfigValue.mockReturnValue("sleep 30");
+    mockedGetConfigValue.mockReturnValue(hangPastTimeout());
     const started = Date.now();
     const out = provider.list();
     const elapsed = Date.now() - started;
@@ -293,10 +348,10 @@ describe("CommandSecretsProvider", () => {
   });
 
   it("list() returns a dotenv map from the command, {} for a bare value", () => {
-    mockedGetConfigValue.mockReturnValue("printf 'A=1\\nB=2\\n'");
+    mockedGetConfigValue.mockReturnValue(emitStdout("A=1\nB=2\n"));
     expect(provider.list()).toEqual({ A: "1", B: "2" });
 
-    mockedGetConfigValue.mockReturnValue("printf 'just-a-value'");
+    mockedGetConfigValue.mockReturnValue(emitStdout("just-a-value"));
     expect(provider.list()).toEqual({});
   });
 
@@ -307,7 +362,7 @@ describe("CommandSecretsProvider", () => {
     // but resolved to null on get() — the two disagreed on "is this key set?".
     // Now list() must drop BLANK while keeping the real key.
     mockedGetConfigValue.mockReturnValue(
-      "printf 'REAL=value\\nBLANK=\"   \"\\n'",
+      emitStdout('REAL=value\nBLANK="   "\n'),
     );
     const listed = provider.list();
     expect(listed).toEqual({ REAL: "value" });
@@ -315,5 +370,15 @@ describe("CommandSecretsProvider", () => {
     // The invariant the fix enforces: list() membership matches get() resolving.
     expect(provider.get("BLANK")).toBeNull();
     expect(provider.get("REAL")).toBe("value");
+  });
+
+  it("chooses the platform shell without requiring bash on Windows", () => {
+    expect(helperShellInvocation("echo ok", "linux")).toEqual({
+      file: "/bin/sh",
+      args: ["-c", "echo ok"],
+    });
+    const win = helperShellInvocation("echo ok", "win32");
+    expect(win.args).toEqual(["/d", "/s", "/c", "echo ok"]);
+    expect(win.file.toLowerCase()).toContain("cmd");
   });
 });

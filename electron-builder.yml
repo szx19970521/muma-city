@@ -1,5 +1,5 @@
-appId: com.nousresearch.hermes
-productName: Hermes One
+appId: com.szx19970521.mumacity
+productName: 牧马城市
 directories:
   buildResources: build
 files:
@@ -13,7 +13,8 @@ asarUnpack:
   - resources/**
   - node_modules/better-sqlite3/build/Release/*.node
 win:
-  executableName: hermes-agent
+  executableName: muma-city
+  icon: build/icon.ico
   target:
     - nsis
     - portable
@@ -42,19 +43,20 @@ mac:
 dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 linux:
+  icon: build/icon.png
   target:
     - AppImage
     - snap
     - deb
     - rpm
-  maintainer: electronjs.org
-  vendor: Nous Research
+  maintainer: szx19970521
+  vendor: Muma City
   category: Utility
-  synopsis: Self-improving AI assistant desktop app
+  synopsis: Game-like Hermes Agent workspace
   description: >-
-    Hermes One is a native desktop app for installing, configuring, and chatting
-    with Hermes Agent — a self-improving AI assistant with tool use, multi-platform
-    messaging, and a closed learning loop.
+    Muma City is a game-like desktop app for installing, configuring, and
+    chatting with Hermes Agent. It brings agents, tasks, memory, local chat
+    history, and gateway controls into one explorable workspace.
 appImage:
   artifactName: ${name}-${version}.${ext}
 deb:
@@ -69,5 +71,5 @@ rpm:
 npmRebuild: false
 publish:
   provider: github
-  owner: fathah
-  repo: hermes-desktop
+  owner: szx19970521
+  repo: muma-city

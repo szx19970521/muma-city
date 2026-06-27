@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import startVid from "../../assets/startvid.mp4";
-import splashLogo from "../../assets/hermes-one.svg";
 
 interface SplashScreenProps {
   onFinished: () => void;
@@ -14,7 +13,8 @@ function SplashScreen({
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    onFinished();
+    const timer = window.setTimeout(onFinished, 1400);
+    return () => window.clearTimeout(timer);
   }, [onFinished]);
 
   useEffect(() => {
@@ -39,7 +39,10 @@ function SplashScreen({
         preload="auto"
         style={{ display: "block", objectFit: "cover" }}
       />
-      <img className="splash-logo" src={splashLogo} alt="Hermes One" />
+      <div className="splash-brand" aria-label="牧马城市">
+        <span>牧马城市</span>
+        <small>让工作在游戏中完成</small>
+      </div>
       {status && <div className="splash-status">{status}</div>}
     </div>
   );

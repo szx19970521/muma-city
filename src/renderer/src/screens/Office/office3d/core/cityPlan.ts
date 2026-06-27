@@ -65,6 +65,56 @@ export const SHOWROOM_Z = 0;
 export const SHOWROOM_WALL_H = 3.0;
 export const SHOWROOM_WALL_T = 0.25;
 
+// Northwest lake park, inspired by Meixi Lake's city-lake / ring-greenway
+// layout. These shared bounds keep generated buildings and collisions aligned.
+export const PARK_CLEARING = {
+  x: -32.3,
+  z: -29.5,
+  rx: 8.2,
+  rz: 7.2,
+} as const;
+
+export const PARK_LAKE = {
+  x: -32.6,
+  z: -29.8,
+  rx: 4.8,
+  rz: 3.65,
+} as const;
+
+export function isInsideParkClearing(x: number, z: number, margin = 0): boolean {
+  const rx = PARK_CLEARING.rx + margin;
+  const rz = PARK_CLEARING.rz + margin;
+  return (
+    ((x - PARK_CLEARING.x) * (x - PARK_CLEARING.x)) / (rx * rx) +
+      ((z - PARK_CLEARING.z) * (z - PARK_CLEARING.z)) / (rz * rz) <=
+    1
+  );
+}
+
+export function rectIntersectsParkClearing(
+  cx: number,
+  z: number,
+  halfX: number,
+  halfZ: number,
+  margin = 0,
+): boolean {
+  const rx = PARK_CLEARING.rx + margin;
+  const rz = PARK_CLEARING.rz + margin;
+  const dx = Math.max(Math.abs(cx - PARK_CLEARING.x) - halfX, 0);
+  const dz = Math.max(Math.abs(z - PARK_CLEARING.z) - halfZ, 0);
+  return (dx * dx) / (rx * rx) + (dz * dz) / (rz * rz) <= 1;
+}
+
+export function isInsideParkLake(x: number, z: number, margin = 0): boolean {
+  const rx = PARK_LAKE.rx + margin;
+  const rz = PARK_LAKE.rz + margin;
+  return (
+    ((x - PARK_LAKE.x) * (x - PARK_LAKE.x)) / (rx * rx) +
+      ((z - PARK_LAKE.z) * (z - PARK_LAKE.z)) / (rz * rz) <=
+    1
+  );
+}
+
 // Cell centres kept building-free because the towers the grid rolled there
 // blocked the default camera's view: one wedged in the gap between the office
 // and bank lots, one right in front of the office entrance. Coordinates match

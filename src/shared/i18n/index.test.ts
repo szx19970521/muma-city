@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { t } from "./index";
 
+const zhCnWelcome = "\u6b22\u8fce\u4f7f\u7528\u7267\u9a6c\u57ce\u5e02";
+const zhTwWelcome = "\u6b61\u8fce\u4f7f\u7528 Hermes";
+
 describe("shared i18n", () => {
-  it("returns English text by default", () => {
-    expect(t("welcome.title")).toBe("Welcome to Hermes");
+  it("returns zh-CN text by default", () => {
+    expect(t("welcome.title")).toBe(zhCnWelcome);
   });
 
   it("falls back to the key when an English key is missing", () => {
@@ -11,11 +14,11 @@ describe("shared i18n", () => {
   });
 
   it("returns zh-CN text when available", () => {
-    expect(t("welcome.title", "zh-CN")).toBe("欢迎使用 Hermes");
+    expect(t("welcome.title", "zh-CN")).toBe(zhCnWelcome);
   });
 
   it("returns zh-TW text when available", () => {
-    expect(t("welcome.title", "zh-TW")).toBe("歡迎使用 Hermes");
+    expect(t("welcome.title", "zh-TW")).toBe(zhTwWelcome);
   });
 
   it("returns es text when available", () => {

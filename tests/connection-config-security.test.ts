@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import http from "http";
-import type { AddressInfo } from "net";
+import { mockHttpRequest } from "./http-request-mock";
 
 let testHome: string;
 
@@ -15,15 +15,6 @@ async function loadConnectionConfigModule(): Promise<
   return await import("../src/main/config");
 }
 
-function listen(server: http.Server): Promise<string> {
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address() as AddressInfo;
-      resolve(`http://127.0.0.1:${address.port}`);
-    });
-  });
-}
-
 describe("connection config secret exposure", () => {
   beforeEach(() => {
     testHome = mkdtempSync(join(tmpdir(), "hermes-connection-config-"));
@@ -31,6 +22,7 @@ describe("connection config secret exposure", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     rmSync(testHome, { recursive: true, force: true });
   });
 
@@ -83,28 +75,22 @@ describe("connection config secret exposure", () => {
   it("uses the stored remote API key for main-process connection tests", async () => {
     const { setConnectionConfig } = await loadConnectionConfigModule();
     const { testRemoteConnection } = await import("../src/main/hermes");
-    const server = http.createServer((req, res) => {
-      res.statusCode =
-        req.headers.authorization === "Bearer remote-secret" ? 200 : 401;
-      res.end();
+    const url = "http://127.0.0.1:18642";
+    mockHttpRequest(http, (req) => ({
+      statusCode: req.headers.authorization === "Bearer remote-secret" ? 200 : 401,
+      body: "",
+    }));
+
+    setConnectionConfig({
+      mode: "remote",
+      remoteUrl: url,
+      apiKey: "remote-secret",
     });
 
-    const url = await listen(server);
-
-    try {
-      setConnectionConfig({
-        mode: "remote",
-        remoteUrl: url,
-        apiKey: "remote-secret",
-      });
-
-      await expect(testRemoteConnection(url)).resolves.toBe(true);
-      await expect(testRemoteConnection(url, "wrong-secret")).resolves.toBe(
-        false,
-      );
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    await expect(testRemoteConnection(url)).resolves.toBe(true);
+    await expect(testRemoteConnection(url, "wrong-secret")).resolves.toBe(
+      false,
+    );
   });
 
   it("exposes SSH settings without exposing the stored remote API key", async () => {

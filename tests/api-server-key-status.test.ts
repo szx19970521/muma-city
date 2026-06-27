@@ -14,6 +14,36 @@ import { tmpdir } from "os";
  */
 
 const TEST_DIR = join(tmpdir(), `hermes-test-key-status-${Date.now()}`);
+let helperCounter = 0;
+
+function shellArg(value: string): string {
+  if (process.platform === "win32") {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function yamlQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function nodeSecretCommand(source: string): string {
+  const file = join(TEST_DIR, `api-status-helper-${helperCounter++}.cjs`);
+  writeFileSync(file, source);
+  return `${shellArg(process.execPath)} ${shellArg(file)}`;
+}
+
+function emitApiServerKey(value: string): string {
+  return yamlQuote(
+    nodeSecretCommand(
+      `process.stdout.write(${JSON.stringify(`API_SERVER_KEY=${value}\n`)});`,
+    ),
+  );
+}
+
+function emptyCommand(): string {
+  return yamlQuote(nodeSecretCommand("process.exit(0);"));
+}
 
 async function freshConfig(
   home: string,
@@ -45,7 +75,7 @@ describe("getApiServerKeyStatus", () => {
       [
         "secrets:",
         "  provider: command",
-        "  command: echo API_SERVER_KEY=synthetic-vault-marker",
+        `  command: ${emitApiServerKey("synthetic-vault-marker")}`,
         "",
       ].join("\n"),
     );
@@ -74,7 +104,12 @@ describe("getApiServerKeyStatus", () => {
   it("reports hasKey=false with the configured providerId when nothing resolves", async () => {
     writeFileSync(
       join(TEST_DIR, "config.yaml"),
-      ["secrets:", "  provider: command", '  command: "exit 0"', ""].join("\n"),
+      [
+        "secrets:",
+        "  provider: command",
+        `  command: ${emptyCommand()}`,
+        "",
+      ].join("\n"),
     );
     const { getApiServerKeyStatus } = await freshConfig(TEST_DIR);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -102,7 +137,12 @@ describe("getApiServerKey missing-key diagnostic", () => {
   it("warns exactly once per (provider, profile) pair, naming the provider", async () => {
     writeFileSync(
       join(TEST_DIR, "config.yaml"),
-      ["secrets:", "  provider: command", '  command: "exit 0"', ""].join("\n"),
+      [
+        "secrets:",
+        "  provider: command",
+        `  command: ${emptyCommand()}`,
+        "",
+      ].join("\n"),
     );
     const { getApiServerKey, invalidateSecretsCache } =
       await freshConfig(TEST_DIR);

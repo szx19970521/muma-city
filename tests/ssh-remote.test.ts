@@ -17,6 +17,16 @@ import {
 } from "../src/main/ssh-remote";
 import type { SshConfig } from "../src/main/ssh-tunnel";
 
+const hasLocalBash = (() => {
+  try {
+    execFileSync("bash", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const itWithLocalBash = hasLocalBash ? it : it.skip;
+
 /** The `then` clause of the leading `if` — the systemd-managed branch. */
 function systemdBranch(command: string): string {
   return command.slice(command.indexOf("then"), command.indexOf("else"));
@@ -98,7 +108,7 @@ describe("ssh Hermes command quoting", () => {
     );
   });
 
-  it.each([
+  itWithLocalBash.each([
     [
       "multi-word title",
       ["kanban", "create", "My task title", "--triage", "--json"],
@@ -124,7 +134,7 @@ describe("ssh Hermes command quoting", () => {
     expect(parseNulArgs(runWithHermesShim(command))).toEqual(expectedArgs);
   });
 
-  it("preserves existing extraShell redirects", () => {
+  itWithLocalBash("preserves existing extraShell redirects", () => {
     const output = runWithHermesShim(
       buildRemoteHermesCmd(["doctor"], " 2>&1"),
     ).toString("utf8");

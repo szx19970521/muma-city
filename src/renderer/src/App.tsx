@@ -15,6 +15,43 @@ type Screen = "splash" | "welcome" | "installing" | "setup" | "main";
 // Minimum time the splash stays visible so the background video plays
 // through. Gateway / config checks happen during this window.
 const SPLASH_MIN_MS = 3000;
+const STARTUP_IPC_TIMEOUT_MS = 8000;
+const appModuleLoadedAt = performance.now();
+
+function logAppStartup(stage: string, details?: unknown): void {
+  const elapsedMs = Math.round(performance.now() - appModuleLoadedAt);
+  if (details === undefined) {
+    console.info(`[STARTUP app +${elapsedMs}ms] ${stage}`);
+    return;
+  }
+  console.info(`[STARTUP app +${elapsedMs}ms] ${stage}`, details);
+}
+
+logAppStartup("module-loaded");
+
+export function withStartupTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = STARTUP_IPC_TIMEOUT_MS,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      logAppStartup("ipc-timeout", { label, timeoutMs });
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
 
 function App(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>("splash");
@@ -38,25 +75,46 @@ function App(): React.JSX.Element {
     let next: Screen = "welcome";
     let error: string | null = null;
     let isRemote = false;
+    logAppStartup("install-check:start");
 
     try {
       setSplashStatus("Checking connection…");
-      const conn = await window.hermesAPI.getConnectionConfig();
+      logAppStartup("install-check:get-connection-config:start");
+      const conn = await withStartupTimeout(
+        window.hermesAPI.getConnectionConfig(),
+        "getConnectionConfig",
+      );
+      logAppStartup("install-check:get-connection-config:complete", {
+        mode: conn.mode,
+      });
       isRemote = conn.mode === "remote" || conn.mode === "ssh";
       setConnectionMode(conn.mode);
 
       if (conn.mode === "ssh" && conn.ssh) {
         setSplashStatus("Starting SSH tunnel…");
+        logAppStartup("install-check:ssh-tunnel:start");
         try {
-          await window.hermesAPI.startSshTunnel();
+          await withStartupTimeout(
+            window.hermesAPI.startSshTunnel(),
+            "startSshTunnel",
+          );
+          logAppStartup("install-check:ssh-tunnel:complete");
           next = "main";
         } catch (tunnelErr) {
+          logAppStartup("install-check:ssh-tunnel:failed", tunnelErr);
           error = `SSH tunnel failed to start: ${(tunnelErr as Error).message}`;
           next = "welcome";
         }
       } else if (conn.mode === "remote" && conn.remoteUrl) {
         setSplashStatus("Testing remote connection…");
-        const ok = await window.hermesAPI.testRemoteConnection(conn.remoteUrl);
+        logAppStartup("install-check:remote-test:start", {
+          remoteUrl: conn.remoteUrl,
+        });
+        const ok = await withStartupTimeout(
+          window.hermesAPI.testRemoteConnection(conn.remoteUrl),
+          "testRemoteConnection",
+        );
+        logAppStartup("install-check:remote-test:complete", { ok });
         if (ok) {
           next = "main";
         } else {
@@ -65,7 +123,15 @@ function App(): React.JSX.Element {
         }
       } else {
         setSplashStatus("Checking local install…");
-        const status = await window.hermesAPI.checkInstall();
+        logAppStartup("install-check:local-install:start");
+        const status = await withStartupTimeout(
+          window.hermesAPI.checkInstall(),
+          "checkInstall",
+        );
+        logAppStartup("install-check:local-install:complete", {
+          installed: status.installed,
+          hasApiKey: status.hasApiKey,
+        });
         if (!status.installed) {
           next = "welcome";
         } else if (!status.hasApiKey) {
@@ -79,6 +145,7 @@ function App(): React.JSX.Element {
         // so it never pushes us past the 3s minimum.
         if (next === "main") {
           setSplashStatus("Checking configuration…");
+          logAppStartup("install-check:background-warm:start");
           await Promise.race([
             Promise.all([
               window.hermesAPI
@@ -92,9 +159,12 @@ function App(): React.JSX.Element {
             ]),
             new Promise<void>((r) => setTimeout(r, 800)),
           ]);
+          logAppStartup("install-check:background-warm:complete");
         }
       }
-    } catch {
+    } catch (startupErr) {
+      logAppStartup("install-check:failed", startupErr);
+      error = `Startup check failed: ${(startupErr as Error).message}`;
       next = "welcome";
     }
 
@@ -103,10 +173,17 @@ function App(): React.JSX.Element {
 
     const elapsed = Date.now() - startedAt;
     const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
+    logAppStartup("install-check:screen-decided", {
+      next,
+      elapsedMs: elapsed,
+      splashWaitMs: wait,
+      hasError: Boolean(error),
+    });
     if (wait > 0) {
       await new Promise((r) => setTimeout(r, wait));
     }
     setScreen(next);
+    logAppStartup("install-check:screen-set", { next });
 
     // Lazy deep-verify in the background after the UI is up. If the
     // install is broken, surface the warning then — don't block startup.
@@ -117,11 +194,20 @@ function App(): React.JSX.Element {
     // this guard the user is bounced back to Welcome with an "installBroken"
     // error immediately after a successful remote connect. (#47, #41, #30)
     if ((next === "main" || next === "setup") && !isRemote) {
-      window.hermesAPI.verifyInstall().then((ok) => {
-        // Files exist (checkInstall passed) but the probe failed. Surface
-        // a soft warning instead of bouncing to Welcome — see #130.
-        if (!ok) setVerifyWarning(true);
-      });
+      logAppStartup("install-check:verify-install:background-start");
+      window.hermesAPI
+        .verifyInstall()
+        .then((ok) => {
+          logAppStartup("install-check:verify-install:background-complete", {
+            ok,
+          });
+          // Files exist (checkInstall passed) but the probe failed. Surface
+          // a soft warning instead of bouncing to Welcome — see #130.
+          if (!ok) setVerifyWarning(true);
+        })
+        .catch((verifyErr) => {
+          logAppStartup("install-check:verify-install:background-failed", verifyErr);
+        });
     }
   }, []);
 

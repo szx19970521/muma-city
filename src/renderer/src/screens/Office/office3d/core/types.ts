@@ -1,4 +1,5 @@
 import type { AgentAvatarProfile } from "../avatars/profile";
+import type { AgentBehaviorIntent } from "./agentBehavior";
 
 // Originally `@/lib/office/places` in hermes-office; the office tab only needs
 // the structural agent types, so we keep this as an open string identifier.
@@ -21,6 +22,16 @@ export type OfficeAgent = {
   gatewayRunning?: boolean;
   /** Org position; defaults to "employee" when unset. The CEO gets a desk. */
   position?: AgentPosition;
+};
+
+export type OfficeAgentTask = {
+  id: string;
+  title: string;
+  assignee: string | null;
+  status: string;
+  priority: number;
+  created_at: number | null;
+  started_at: number | null;
 };
 
 export type JanitorTool = "broom" | "vacuum" | "floor_scrubber";
@@ -56,7 +67,15 @@ export type RenderAgent = SceneActor & {
     | "standing"
     | "away"
     | "working_out"
-    | "dancing";
+    | "dancing"
+    | "working_at_desk"
+    | "talking_to_player"
+    | "using_memory"
+    | "using_comms"
+    | "using_tools"
+    | "opening_door"
+    | "idle_patrol";
+  behavior?: AgentBehaviorIntent;
   awayUntil?: number;
   separationReplanAt?: number;
   bumpedUntil?: number;

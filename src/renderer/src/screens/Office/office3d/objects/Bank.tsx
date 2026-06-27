@@ -24,10 +24,10 @@ import {
 } from "../core/cityPlan";
 
 const BANK_PALETTE = {
-  floor: "#d4c8b8",
-  wall: "#e8e0d4",
+  floor: "#cfc3b3",
+  wall: "#ded6ca",
   counter: "#8b7355",
-  counterTop: "#f5f0e8",
+  counterTop: "#e7ddcf",
   personShirt: ["#c44", "#44c", "#4a4", "#a4a", "#c84", "#488"],
 };
 

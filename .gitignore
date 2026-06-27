@@ -29,6 +29,9 @@ pnpm-debug.log*
 release/
 .claude/worktrees
 
+# Local experiment/download workspace
+work/
+
 # Tauri
 **/src-tauri/target/
 **/src-tauri/gen/

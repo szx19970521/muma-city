@@ -1,5 +1,5 @@
 export default {
-  appName: "Hermes One",
+  appName: "Muma City",
   continue: "Continue",
   cancel: "Cancel",
   retry: "Retry",

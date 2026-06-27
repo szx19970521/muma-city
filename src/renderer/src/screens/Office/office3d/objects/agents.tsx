@@ -1,9 +1,9 @@
-import { Billboard, Text } from "@react-three/drei";
-import { useFrame } from "@react-three/fiber";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Billboard } from "@react-three/drei";
+import { useFrame, useThree } from "@react-three/fiber";
+import { memo, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { createDefaultAgentAvatarProfile } from "../avatars/profile";
-import { AGENT_SCALE, WALK_ANIM_SPEED } from "../core/constants";
+import { AGENT_SCALE, WALK_ANIM_SPEED, WORLD_H, WORLD_W } from "../core/constants";
 import { toWorld } from "../core/geometry";
 import { DIVIDER_X } from "../layout";
 import type { JanitorActor, RenderAgent } from "../core/types";
@@ -14,13 +14,13 @@ const MAX_NAMEPLATE_TEXT_LENGTH = 22;
 const MAX_SPEECH_BUBBLE_TEXT_LENGTH = 180;
 const MAX_SPEECH_BUBBLE_LINES = 4;
 const DESK_SIT_DROP = -0.03;
-const REST_SIT_DROP = -0.01;
+const REST_SIT_DROP = 0.08;
 
 const formatAgentNameplateText = (value: string): string => {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (!normalized) return "";
   if (normalized.length <= MAX_NAMEPLATE_TEXT_LENGTH) return normalized;
-  return `${normalized.slice(0, MAX_NAMEPLATE_TEXT_LENGTH - 1).trimEnd()}…`;
+  return `${normalized.slice(0, MAX_NAMEPLATE_TEXT_LENGTH - 3).trimEnd()}...`;
 };
 
 const flattenSpeechBubbleMarkdown = (value: string) =>
@@ -41,8 +41,138 @@ const clampSpeechBubbleText = (value: string) => {
     return { text: value, truncated: false };
   }
   const slice = value.slice(0, MAX_SPEECH_BUBBLE_TEXT_LENGTH - 1).trimEnd();
-  return { text: `${slice}…`, truncated: true };
+  return { text: `${slice}...`, truncated: true };
 };
+
+function wrapCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines: number,
+): string[] {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [""];
+  const lines: string[] = [];
+  let current = "";
+  for (const char of normalized) {
+    const candidate = `${current}${char}`;
+    if (current && ctx.measureText(candidate).width > maxWidth) {
+      lines.push(current);
+      current = char;
+      if (lines.length >= maxLines) break;
+    } else {
+      current = candidate;
+    }
+  }
+  if (lines.length < maxLines && current) lines.push(current);
+  if (lines.length > maxLines) lines.length = maxLines;
+  return lines;
+}
+
+function useCanvasTextTexture({
+  text,
+  color,
+  fontPx,
+  width,
+  height,
+  weight = 700,
+  align = "center",
+  maxLines = 1,
+  lineHeight = 1.18,
+}: {
+  text: string;
+  color: string;
+  fontPx: number;
+  width: number;
+  height: number;
+  weight?: number;
+  align?: CanvasTextAlign;
+  maxLines?: number;
+  lineHeight?: number;
+}): THREE.CanvasTexture {
+  const texture = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return new THREE.CanvasTexture(canvas);
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${fontPx}px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = align;
+
+    const linePx = fontPx * lineHeight;
+    const lines = wrapCanvasText(ctx, text, width - 28, maxLines);
+    const totalHeight = (lines.length - 1) * linePx;
+    const x = align === "left" ? 14 : align === "right" ? width - 14 : width / 2;
+    lines.forEach((line, index) => {
+      ctx.fillText(line, x, height / 2 - totalHeight / 2 + index * linePx);
+    });
+
+    const nextTexture = new THREE.CanvasTexture(canvas);
+    nextTexture.colorSpace = THREE.SRGBColorSpace;
+    nextTexture.minFilter = THREE.LinearFilter;
+    nextTexture.magFilter = THREE.LinearFilter;
+    nextTexture.needsUpdate = true;
+    return nextTexture;
+  }, [align, color, fontPx, height, lineHeight, maxLines, text, weight, width]);
+
+  useEffect(() => () => texture.dispose(), [texture]);
+  return texture;
+}
+
+function CanvasTextPlane({
+  text,
+  position,
+  size,
+  color,
+  fontPx,
+  weight,
+  align,
+  maxLines,
+  lineHeight,
+  renderOrder,
+  depthTest = true,
+  depthWrite = false,
+}: {
+  text: string;
+  position: [number, number, number];
+  size: [number, number];
+  color: string;
+  fontPx: number;
+  weight?: number;
+  align?: CanvasTextAlign;
+  maxLines?: number;
+  lineHeight?: number;
+  renderOrder?: number;
+  depthTest?: boolean;
+  depthWrite?: boolean;
+}) {
+  const texture = useCanvasTextTexture({
+    text,
+    color,
+    fontPx,
+    width: Math.max(128, Math.round(size[0] * 420)),
+    height: Math.max(64, Math.round(size[1] * 420)),
+    weight,
+    align,
+    maxLines,
+    lineHeight,
+  });
+  return (
+    <mesh position={position} renderOrder={renderOrder}>
+      <planeGeometry args={size} />
+      <meshBasicMaterial
+        map={texture}
+        transparent
+        depthTest={depthTest}
+        depthWrite={depthWrite}
+      />
+    </mesh>
+  );
+}
 
 export const AgentModel = memo(function AgentModel({
   agentId,
@@ -56,6 +186,7 @@ export const AgentModel = memo(function AgentModel({
   onHover,
   onUnhover,
   onClick,
+  onInteract,
   onContextMenu,
   showSpeech = false,
   speechText = null,
@@ -64,6 +195,8 @@ export const AgentModel = memo(function AgentModel({
   riggedModelTint = null,
 }: AgentModelProps) {
   const groupRef = useRef<THREE.Group>(null);
+  const proceduralBodyRef = useRef<THREE.Group>(null);
+  const riggedBodyRef = useRef<THREE.Group>(null);
   const leftArmRef = useRef<THREE.Group>(null);
   const rightArmRef = useRef<THREE.Group>(null);
   const leftLegRef = useRef<THREE.Group>(null);
@@ -87,17 +220,16 @@ export const AgentModel = memo(function AgentModel({
   const heldBucketRef = useRef<THREE.Group>(null);
   const heldScrubberRef = useRef<THREE.Group>(null);
   const speechBubbleRef = useRef<THREE.Group>(null);
+  const nameplateRef = useRef<THREE.Group>(null);
   const speechBubbleMatRef = useRef<THREE.MeshBasicMaterial>(null);
   const awayBubbleRef = useRef<THREE.Group>(null);
   const bodyMatRef = useRef<THREE.MeshLambertMaterial>(null);
   const pos = useRef(new THREE.Vector3(0, 0, 0));
-  // Rendered width of the name (world units), measured from troika's layout so
-  // the nameplate background can size itself to the text.
-  const [nameWidth, setNameWidth] = useState(0);
   const resolvedAppearance = useMemo(
     () => appearance ?? createDefaultAgentAvatarProfile(agentId),
     [agentId, appearance],
   );
+  const camera = useThree((state) => state.camera);
 
   useFrame(() => {
     const agent =
@@ -108,6 +240,21 @@ export const AgentModel = memo(function AgentModel({
     const [wx, , wz] = toWorld(agent.x, agent.y);
     pos.current.set(wx, 0, wz);
     groupRef.current.position.lerp(pos.current, 0.15);
+    const cameraOutsideOffice =
+      camera.position.x < -WORLD_W / 2 - 0.5 ||
+      camera.position.x > WORLD_W / 2 + 0.5 ||
+      camera.position.z < -WORLD_H / 2 - 0.5 ||
+      camera.position.z > WORLD_H / 2 + 0.5;
+    const agentInsideOffice =
+      wx > -WORLD_W / 2 - 0.5 &&
+      wx < WORLD_W / 2 + 0.5 &&
+      wz > -WORLD_H / 2 - 0.5 &&
+      wz < WORLD_H / 2 + 0.5;
+    const nearAgent =
+      Math.hypot(camera.position.x - wx, camera.position.z - wz) < 3.2;
+    const sceneLabelVisible =
+      !cameraOutsideOffice || !agentInsideOffice || nearAgent;
+    if (nameplateRef.current) nameplateRef.current.visible = sceneLabelVisible;
 
     const targetY = agent.facing;
     let rotDelta = targetY - groupRef.current.rotation.y;
@@ -116,6 +263,25 @@ export const AgentModel = memo(function AgentModel({
     groupRef.current.rotation.y += rotDelta * 0.12;
     const isWorkout = agent.state === "working_out";
     const isDancing = agent.state === "dancing";
+    const isDeskWork = agent.state === "working_at_desk";
+    const isTalkingToPlayer = agent.state === "talking_to_player";
+    const isOpeningDoor = agent.state === "opening_door";
+    const isUsingMemory = agent.state === "using_memory";
+    const isUsingComms = agent.state === "using_comms";
+    const isUsingTools = agent.state === "using_tools";
+    const isSittingPose = agent.state === "sitting" || isDeskWork;
+    if (proceduralBodyRef.current) {
+      proceduralBodyRef.current.visible = !riggedModelUrl;
+    }
+    if (riggedBodyRef.current) {
+      riggedBodyRef.current.visible = Boolean(riggedModelUrl);
+      // Rocketbox clips already carry their own seated body pose. The old
+      // procedural avatar tilted/dropped the whole group for sitting, which
+      // makes a rigged human slide into the table. Keep the rig upright and
+      // only nudge desk work back from the desktop so the rig sits in the
+      // chair instead of standing through the desk edge.
+      riggedBodyRef.current.position.set(0, 0, isDeskWork ? -0.16 : 0);
+    }
     const isJanitor = "role" in agent && agent.role === "janitor";
     const janitorTool = isJanitor
       ? (agent as RenderAgent & JanitorActor).janitorTool
@@ -130,26 +296,25 @@ export const AgentModel = memo(function AgentModel({
       agent.frame * 0.18 + (agent.phaseOffset ?? 0) + Math.PI / 2,
     );
     groupRef.current.rotation.z = 0;
-    groupRef.current.rotation.x =
-      agent.state === "sitting"
-        ? -0.15
-        : isDancing
-          ? Math.sin(agent.frame * 0.18 + (agent.phaseOffset ?? 0)) * 0.06
-          : isWorkout
-            ? workoutStyle === "bike"
-              ? 0.18
-              : workoutStyle === "row"
-                ? -0.12 + Math.max(0, workoutPhase) * 0.08
-                : workoutStyle === "stretch"
-                  ? -0.08
-                  : workoutStyle === "run"
-                    ? 0.08
-                    : workoutStyle === "box"
-                      ? 0.04
-                      : 0.02
-            : agent.pingPongUntil
-              ? 0.08
-              : 0;
+    groupRef.current.rotation.x = !riggedModelUrl && isSittingPose
+      ? -0.15
+      : isDancing
+        ? Math.sin(agent.frame * 0.18 + (agent.phaseOffset ?? 0)) * 0.06
+        : isWorkout
+          ? workoutStyle === "bike"
+            ? 0.18
+            : workoutStyle === "row"
+              ? -0.12 + Math.max(0, workoutPhase) * 0.08
+              : workoutStyle === "stretch"
+                ? -0.08
+                : workoutStyle === "run"
+                  ? 0.08
+                  : workoutStyle === "box"
+                    ? 0.04
+                    : 0.02
+          : agent.pingPongUntil
+            ? 0.08
+            : 0;
     const bounce =
       agent.state === "walking"
         ? Math.sin(frameValue * WALK_ANIM_SPEED) * 0.04
@@ -165,14 +330,22 @@ export const AgentModel = memo(function AgentModel({
                 : 0.02 + Math.abs(workoutPhase) * 0.04
             : 0;
     const breathe =
-      agent.state === "standing" || isWorkout || agent.pingPongUntil
+      agent.state === "standing" ||
+      isTalkingToPlayer ||
+      isOpeningDoor ||
+      isUsingMemory ||
+      isUsingComms ||
+      isUsingTools ||
+      agent.state === "idle_patrol" ||
+      isWorkout ||
+      agent.pingPongUntil
         ? Math.sin(frameValue * 0.03) * 0.01
         : 0;
     // Sitting lowers the hips onto the chair seat (legs bend forward below).
     // Desk chairs need a small drop; rest-room beanbags are lower so agents
     // sink further to avoid levitating above the lounge chair surface.
     const sitDrop =
-      agent.state === "sitting"
+      isSittingPose && !riggedModelUrl
         ? agent.x > DIVIDER_X
           ? REST_SIT_DROP
           : DESK_SIT_DROP
@@ -180,12 +353,20 @@ export const AgentModel = memo(function AgentModel({
     groupRef.current.position.y = bounce + breathe + sitDrop;
 
     if (leftArmRef.current) {
+      leftArmRef.current.visible = true;
       leftArmRef.current.rotation.x = 0;
       leftArmRef.current.rotation.y = 0;
       leftArmRef.current.rotation.z = 0;
       if (isJanitor && janitorTool !== "broom") {
         leftArmRef.current.rotation.x = -0.22;
         leftArmRef.current.rotation.z = -0.08;
+      } else if (isOpeningDoor) {
+        leftArmRef.current.rotation.x = -0.38;
+        leftArmRef.current.rotation.z = -0.22;
+      } else if (isUsingMemory || isUsingComms || isUsingTools) {
+        leftArmRef.current.rotation.x =
+          -0.72 + Math.sin(agent.frame * 0.08) * 0.08;
+        leftArmRef.current.rotation.z = -0.28;
       } else if (agent.state === "walking") {
         leftArmRef.current.rotation.x = walkPhase * 0.4;
       } else if (isDancing) {
@@ -233,12 +414,16 @@ export const AgentModel = memo(function AgentModel({
       } else if (agent.pingPongUntil) {
         leftArmRef.current.rotation.x =
           0.2 + Math.sin(agent.frame * 0.08) * 0.28;
-      } else if (agent.state === "sitting") {
-        // Rest the arms forward toward the desk (negative = forward here).
-        leftArmRef.current.rotation.x = -0.45;
+      } else if (isSittingPose) {
+        leftArmRef.current.rotation.x = isDeskWork
+          ? -1.32 + Math.sin(agent.frame * 0.18) * 0.08
+          : -0.45;
+        leftArmRef.current.rotation.y = isDeskWork ? -0.08 : 0;
+        leftArmRef.current.rotation.z = isDeskWork ? -0.26 : 0;
       }
     }
     if (rightArmRef.current) {
+      rightArmRef.current.visible = true;
       rightArmRef.current.rotation.x = 0;
       rightArmRef.current.rotation.y = 0;
       rightArmRef.current.rotation.z = 0;
@@ -246,6 +431,15 @@ export const AgentModel = memo(function AgentModel({
         rightArmRef.current.rotation.x = -0.95;
         rightArmRef.current.rotation.y = 0.18;
         rightArmRef.current.rotation.z = 0.08;
+      } else if (isOpeningDoor) {
+        rightArmRef.current.rotation.x =
+          -1.05 + Math.sin(agent.frame * 0.1) * 0.05;
+        rightArmRef.current.rotation.y = 0.18;
+        rightArmRef.current.rotation.z = 0.18;
+      } else if (isUsingMemory || isUsingComms || isUsingTools) {
+        rightArmRef.current.rotation.x =
+          -0.82 + Math.cos(agent.frame * 0.1) * 0.12;
+        rightArmRef.current.rotation.z = 0.24;
       } else if (agent.state === "walking") {
         rightArmRef.current.rotation.x = -walkPhase * 0.4;
       } else if (isDancing) {
@@ -293,9 +487,12 @@ export const AgentModel = memo(function AgentModel({
       } else if (agent.pingPongUntil) {
         rightArmRef.current.rotation.x =
           0.08 - Math.sin(agent.frame * 0.08) * 0.16;
-      } else if (agent.state === "sitting") {
-        // Rest the arms forward toward the desk (negative = forward here).
-        rightArmRef.current.rotation.x = -0.45;
+      } else if (isSittingPose) {
+        rightArmRef.current.rotation.x = isDeskWork
+          ? -1.22 + Math.cos(agent.frame * 0.2) * 0.06
+          : -0.45;
+        rightArmRef.current.rotation.y = isDeskWork ? 0.16 : 0;
+        rightArmRef.current.rotation.z = isDeskWork ? 0.2 : 0;
       }
     }
     if (leftLegRef.current) {
@@ -340,9 +537,9 @@ export const AgentModel = memo(function AgentModel({
     }
     // Seated: bend both legs forward at the hip (negative rotation.x swings
     // limbs toward the facing direction in this rig) so the avatar reads as
-    // sitting on the chair rather than standing at — and clipping into — the
+    // sitting on the chair rather than standing at 鈥?and clipping into 鈥?the
     // desk.
-    if (agent.state === "sitting") {
+    if (isSittingPose) {
       if (leftLegRef.current) leftLegRef.current.rotation.x = -0.85;
       if (rightLegRef.current) rightLegRef.current.rotation.x = -0.85;
     }
@@ -350,9 +547,14 @@ export const AgentModel = memo(function AgentModel({
     // `working` drives the activity-based face/animation cues (a seated,
     // exercising or dancing agent looks engaged). It is NOT the gateway state.
     const working =
-      agent.state === "sitting" ||
+      isSittingPose ||
       isWorkout ||
       isDancing ||
+      isUsingMemory ||
+      isUsingComms ||
+      isUsingTools ||
+      isOpeningDoor ||
+      isTalkingToPlayer ||
       agent.status === "working";
     const isError = agent.status === "error";
     const isAway = agent.state === "away";
@@ -423,6 +625,7 @@ export const AgentModel = memo(function AgentModel({
       (working ? -0.006 : 0) +
       (isError ? -0.004 : 0) +
       (agent.state === "walking" ? 0.004 : 0) +
+      (isTalkingToPlayer ? 0.004 : 0) +
       (isAway ? -0.008 : 0);
 
     for (const eyeRef of [leftEyeRef, rightEyeRef]) {
@@ -518,6 +721,7 @@ export const AgentModel = memo(function AgentModel({
     if (speechBubbleRef.current) {
       const bubbleVisible =
         !suppressSpeechBubble &&
+        sceneLabelVisible &&
         (showSpeech || bumpTalking || ambientBubbleVisible);
       speechBubbleRef.current.visible = bubbleVisible;
       if (bubbleVisible) {
@@ -614,9 +818,10 @@ export const AgentModel = memo(function AgentModel({
   const cuffColor = topStyle === "hoodie" ? "#d1d5db" : sleeveColor;
   const topAccentColor = topStyle === "jacket" ? "#1f2937" : cuffColor;
 
-  const nameplateY = riggedModelUrl ? 1.45 : 1.05;
-  const awayY = riggedModelUrl ? 1.7 : 1.3;
-  const speechY = riggedModelUrl ? 1.85 : 1.45;
+  const labelScale = riggedModelUrl ? 0.38 : 0.62;
+  const nameplateY = riggedModelUrl ? 1.28 : 0.84;
+  const awayY = riggedModelUrl ? 1.48 : 1.3;
+  const speechY = riggedModelUrl ? 1.58 : 1.2;
 
   const faceTexture = useMemo(() => {
     const canvas = document.createElement("canvas");
@@ -669,7 +874,7 @@ export const AgentModel = memo(function AgentModel({
   const speechBubbleWasTruncated = speechBubblePreview.truncated;
   const speechBubbleTextLength = speechBubbleDisplayText.length;
   const speechBubbleWidth = activeSpeechBubble
-    ? Math.min(4.6, Math.max(1.8, 1.55 + speechBubbleTextLength * 0.018))
+    ? Math.min(3.8, Math.max(1.7, 1.45 + speechBubbleTextLength * 0.017))
     : 0.36;
   const speechBubblePaddingX = activeSpeechBubble ? 0.34 : 0.06;
   const speechBubblePaddingY = activeSpeechBubble ? 0.3 : 0.06;
@@ -725,19 +930,17 @@ export const AgentModel = memo(function AgentModel({
           ? 0.124
           : 0.144;
 
-  // The nameplate background hugs the rendered name width (measured via troika's
-  // onSync) plus room for the left accent bar, the status dot and side padding,
-  // so long names no longer overflow a fixed-width plate.
+  // The nameplate background hugs an estimated text width plus room for the
+  // left accent bar, the status dot and side padding. Text is rendered through
+  // CanvasTexture to avoid troika's remote CJK font fallback in packaged builds.
   const NAMEPLATE_BAR_W = 0.028;
   const NAMEPLATE_DOT_R = 0.052;
   const NAMEPLATE_DOT_MARGIN = 0.055;
   const NAMEPLATE_PAD = 0.075;
   const nameplateHeight = subtitleText ? 0.34 : 0.24;
-  // Estimate before the first layout lands, then use the measured width.
   const estimatedNameWidth = nameplateText.length * nameplateFontSize * 0.62;
-  const measuredNameWidth = nameWidth > 0 ? nameWidth : estimatedNameWidth;
   const nameplateWidth =
-    measuredNameWidth +
+    estimatedNameWidth +
     NAMEPLATE_BAR_W +
     NAMEPLATE_DOT_R * 2 +
     NAMEPLATE_DOT_MARGIN +
@@ -754,6 +957,11 @@ export const AgentModel = memo(function AgentModel({
     <group
       ref={groupRef}
       scale={[AGENT_SCALE, AGENT_SCALE, AGENT_SCALE]}
+      userData={{
+        aimashiAgentId: agentId,
+        aimashiInteract: () => onInteract?.(agentId),
+        aimashiCollisionRadius: 0.38,
+      }}
       onPointerOver={(event) => {
         event.stopPropagation();
         onHover?.(agentId);
@@ -769,8 +977,7 @@ export const AgentModel = memo(function AgentModel({
         onContextMenu?.(agentId, nativeEvent.clientX, nativeEvent.clientY);
       }}
     >
-      {!riggedModelUrl && (
-        <group>
+      <group ref={proceduralBodyRef} visible={!riggedModelUrl}>
           <mesh position={[0, 0.001, 0]} rotation={[-Math.PI / 2, 0, 0]}>
             <circleGeometry args={[0.12, 12]} />
             <meshBasicMaterial color="#000" transparent opacity={0.2} />
@@ -1006,6 +1213,42 @@ export const AgentModel = memo(function AgentModel({
               <meshLambertMaterial color={skin} />
             </mesh>
           </group>
+          <group visible={false}>
+            <mesh
+              position={[0.09, 0.455, 0.22]}
+              rotation={[-0.08, -0.08, -0.05]}
+              castShadow
+            >
+              <boxGeometry args={[0.048, 0.052, 0.36]} />
+              <meshLambertMaterial color={sleeveColor} />
+            </mesh>
+            <mesh
+              position={[-0.08, 0.45, 0.23]}
+              rotation={[-0.04, 0.12, 0.05]}
+              castShadow
+            >
+              <boxGeometry args={[0.048, 0.052, 0.36]} />
+              <meshLambertMaterial color={sleeveColor} />
+            </mesh>
+            <mesh
+              position={[0.12, 0.462, 0.43]}
+              rotation={[0.08, 0, -0.12]}
+              scale={[1.35, 0.34, 0.82]}
+              castShadow
+            >
+              <sphereGeometry args={[0.044, 16, 12]} />
+              <meshLambertMaterial color={skin} />
+            </mesh>
+            <mesh
+              position={[-0.07, 0.455, 0.43]}
+              rotation={[0.08, 0, 0.12]}
+              scale={[1.25, 0.34, 0.9]}
+              castShadow
+            >
+              <sphereGeometry args={[0.044, 16, 12]} />
+              <meshLambertMaterial color={skin} />
+            </mesh>
+          </group>
           <mesh position={[0, 0.39, 0]}>
             <boxGeometry args={[0.07, 0.05, 0.07]} />
             <meshLambertMaterial color={skin} />
@@ -1170,8 +1413,7 @@ export const AgentModel = memo(function AgentModel({
             <boxGeometry args={[0.014, 0.014, 0.01]} />
             <meshBasicMaterial color="#9c4a4a" />
           </mesh>
-        </group>
-      )}
+      </group>
       <mesh
         ref={pulseRingRef}
         position={[0, 0.005, 0]}
@@ -1188,57 +1430,72 @@ export const AgentModel = memo(function AgentModel({
         />
       </mesh>
       {riggedModelUrl && (
-        <RiggedCharacter
-          url={riggedModelUrl}
-          agentId={agentId}
-          agentsRef={agentsRef}
-          agentLookupRef={agentLookupRef}
-          tint={riggedModelTint}
-        />
+        <group ref={riggedBodyRef}>
+          <RiggedCharacter
+            url={riggedModelUrl}
+            agentId={agentId}
+            agentsRef={agentsRef}
+            agentLookupRef={agentLookupRef}
+            tint={riggedModelTint}
+            appearance={appearance}
+          />
+        </group>
       )}
-      {!activeSpeechBubble && nameplateText ? (
-        <Billboard position={[0, nameplateY, 0]}>
-          <mesh position={[0, 0, -0.001]}>
+      {nameplateText ? (
+        <Billboard ref={nameplateRef} position={[0, nameplateY, 0]} scale={labelScale}>
+          <mesh position={[0, 0, -0.001]} renderOrder={99990}>
             <planeGeometry args={[nameplateWidth, nameplateHeight]} />
-            <meshBasicMaterial color="#080c14" transparent opacity={0.9} />
+            <meshBasicMaterial
+              color="#080c14"
+              transparent
+              opacity={activeSpeechBubble ? 0.78 : 0.9}
+              depthTest={false}
+              depthWrite={false}
+            />
           </mesh>
-          <mesh position={[nameplateBarX, 0, 0]}>
+          <mesh position={[nameplateBarX, 0, 0]} renderOrder={99991}>
             <planeGeometry args={[NAMEPLATE_BAR_W, nameplateHeight]} />
-            <meshBasicMaterial color={color} />
+            <meshBasicMaterial
+              color={color}
+              depthTest={false}
+              depthWrite={false}
+            />
           </mesh>
-          <mesh position={[nameplateDotX, subtitleText ? 0.05 : 0, 0]}>
-            <circleGeometry args={[NAMEPLATE_DOT_R, 14]} />
-            <meshBasicMaterial ref={statusDotMatRef} color="#ef4444" />
-          </mesh>
-          <Text
-            position={[nameplateTextCenterX, subtitleText ? 0.05 : 0, 0.001]}
-            fontSize={nameplateFontSize}
-            color="#e8dfc0"
-            anchorX="center"
-            anchorY="middle"
-            font={undefined}
-            onSync={(troika) => {
-              const bounds = troika?.textRenderInfo?.blockBounds;
-              if (!bounds) return;
-              const measured = bounds[2] - bounds[0];
-              setNameWidth((prev) =>
-                Math.abs(prev - measured) > 0.003 ? measured : prev,
-              );
-            }}
+          <mesh
+            position={[nameplateDotX, subtitleText ? 0.05 : 0, 0]}
+            renderOrder={99992}
           >
-            {nameplateText}
-          </Text>
+            <circleGeometry args={[NAMEPLATE_DOT_R, 14]} />
+            <meshBasicMaterial
+              ref={statusDotMatRef}
+              color="#ef4444"
+              depthTest={false}
+              depthWrite={false}
+            />
+          </mesh>
+          <CanvasTextPlane
+            text={nameplateText}
+            position={[nameplateTextCenterX, subtitleText ? 0.05 : 0, 0.001]}
+            size={[Math.max(0.4, nameplateTextRight - nameplateTextLeft), 0.16]}
+            fontPx={52}
+            color="#e8dfc0"
+            weight={800}
+            renderOrder={99993}
+            depthTest={false}
+            depthWrite={false}
+          />
           {subtitleText ? (
-            <Text
+            <CanvasTextPlane
+              text={subtitleText}
               position={[nameplateTextCenterX, -0.085, 0.001]}
-              fontSize={0.082}
+              size={[Math.max(0.4, nameplateTextRight - nameplateTextLeft), 0.12]}
+              fontPx={34}
               color="#8ab4ff"
-              anchorX="center"
-              anchorY="middle"
-              font={undefined}
-            >
-              {subtitleText}
-            </Text>
+              weight={700}
+              renderOrder={99994}
+              depthTest={false}
+              depthWrite={false}
+            />
           ) : null}
         </Billboard>
       ) : null}
@@ -1248,19 +1505,18 @@ export const AgentModel = memo(function AgentModel({
             <planeGeometry args={[0.32, 0.18]} />
             <meshBasicMaterial color="#0d1015" transparent opacity={0.85} />
           </mesh>
-          <Text
+          <CanvasTextPlane
+            text="z z z"
             position={[0, 0, 0.001]}
-            fontSize={0.11}
+            size={[0.26, 0.13]}
+            fontPx={44}
             color="#6080b0"
-            anchorX="center"
-            anchorY="middle"
-          >
-            z z z
-          </Text>
+            weight={700}
+          />
         </Billboard>
       </group>
       <group ref={speechBubbleRef} visible={false}>
-        <Billboard position={[0, speechY, 0]}>
+        <Billboard position={[0, speechY, 0]} scale={labelScale}>
           {activeSpeechBubble ? (
             <mesh
               position={[
@@ -1309,42 +1565,36 @@ export const AgentModel = memo(function AgentModel({
               depthWrite={false}
             />
           </mesh>
-          <Text
-            position={
-              activeSpeechBubble
-                ? [-speechBubbleWidth / 2 + speechBubblePaddingX / 2, 0, 0.001]
-                : [0, 0, 0.001]
-            }
-            fontSize={speechBubbleFontSize}
+          <CanvasTextPlane
+            text={speechBubbleDisplayText}
+            position={[0, 0, 0.001]}
+            size={[
+              activeSpeechBubble ? speechBubbleMaxWidth : speechBubbleWidth - 0.08,
+              Math.max(
+                0.12,
+                speechBubbleHeight - (activeSpeechBubble ? speechBubblePaddingY : 0.08),
+              ),
+            ]}
+            fontPx={activeSpeechBubble ? Math.round(speechBubbleFontSize * 220) : 48}
             color={speechBubbleTextColor}
-            anchorX={activeSpeechBubble ? "left" : "center"}
-            anchorY="middle"
-            maxWidth={speechBubbleMaxWidth}
-            textAlign={activeSpeechBubble ? "left" : "center"}
+            align={activeSpeechBubble ? "left" : "center"}
+            maxLines={activeSpeechBubble ? MAX_SPEECH_BUBBLE_LINES : 1}
             lineHeight={1.1}
             renderOrder={100000}
-            depthOffset={-10}
-            material-depthTest={false}
-            material-depthWrite={false}
-          >
-            {speechBubbleDisplayText}
-          </Text>
+            depthTest={false}
+            depthWrite={false}
+          />
           {activeSpeechBubble && speechBubbleWasTruncated ? (
-            <Text
+            <CanvasTextPlane
+              text="点击查看完整对话"
               position={[0, -speechBubbleHeight * 0.34, 0.001]}
-              fontSize={0.09}
+              size={[speechBubbleMaxWidth, 0.12]}
+              fontPx={34}
               color="#8ab4ff"
-              anchorX="center"
-              anchorY="middle"
-              maxWidth={speechBubbleMaxWidth}
-              textAlign="center"
               renderOrder={100001}
-              depthOffset={-10}
-              material-depthTest={false}
-              material-depthWrite={false}
-            >
-              click for full chat
-            </Text>
+              depthTest={false}
+              depthWrite={false}
+            />
           ) : null}
         </Billboard>
       </group>

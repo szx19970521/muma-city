@@ -1,4 +1,15 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  vi,
+  beforeEach,
+  afterEach,
+  afterAll,
+} from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 // F6 regression tests: the helper's stderr must be piped (and discarded), never
 // inherited into the Electron main process's stderr.
@@ -9,6 +20,31 @@ import { getConfigValue } from "../config";
 import { CommandSecretsProvider, helperExecOptions } from "./commandProvider";
 
 const mockedGetConfigValue = vi.mocked(getConfigValue);
+const HELPER_DIR = mkdtempSync(join(tmpdir(), "hermes-command-stdio-"));
+let helperCounter = 0;
+
+function shellArg(value: string): string {
+  if (process.platform === "win32") {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function nodeSecretCommand(source: string): string {
+  const file = join(HELPER_DIR, `stdio-helper-${helperCounter++}.cjs`);
+  writeFileSync(file, source);
+  return `${shellArg(process.execPath)} ${shellArg(file)}`;
+}
+
+function emitWithStderr(stdout: string): string {
+  return nodeSecretCommand(
+    `process.stderr.write("STDERR_SECRET_MARKER"); process.stdout.write(${JSON.stringify(stdout)});`,
+  );
+}
+
+afterAll(() => {
+  rmSync(HELPER_DIR, { recursive: true, force: true });
+});
 
 describe("CommandSecretsProvider stdio hygiene (F6)", () => {
   const provider = new CommandSecretsProvider();
@@ -36,17 +72,13 @@ describe("CommandSecretsProvider stdio hygiene (F6)", () => {
   }
 
   it("get(): helper stderr is discarded while stdout still resolves", () => {
-    mockedGetConfigValue.mockReturnValue(
-      "printf 'STDERR_SECRET_MARKER' >&2; printf 'OK'",
-    );
+    mockedGetConfigValue.mockReturnValue(emitWithStderr("OK"));
     expect(provider.get("K")).toBe("OK");
     expect(capturedStderr()).not.toContain("STDERR_SECRET_MARKER");
   });
 
   it("list(): helper stderr is discarded while the dotenv map still parses", () => {
-    mockedGetConfigValue.mockReturnValue(
-      "printf 'STDERR_SECRET_MARKER' >&2; printf 'A=1\\nB=2\\n'",
-    );
+    mockedGetConfigValue.mockReturnValue(emitWithStderr("A=1\nB=2\n"));
     expect(provider.list()).toEqual({ A: "1", B: "2" });
     expect(capturedStderr()).not.toContain("STDERR_SECRET_MARKER");
   });

@@ -18,6 +18,32 @@ import { tmpdir } from "os";
  */
 
 const TEST_DIR = join(tmpdir(), `hermes-test-secrets-key-${Date.now()}`);
+let helperCounter = 0;
+
+function shellArg(value: string): string {
+  if (process.platform === "win32") {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function yamlQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function nodeSecretCommand(source: string): string {
+  const file = join(TEST_DIR, `api-key-helper-${helperCounter++}.cjs`);
+  writeFileSync(file, source);
+  return `${shellArg(process.execPath)} ${shellArg(file)}`;
+}
+
+function emitApiServerKey(value: string): string {
+  return yamlQuote(
+    nodeSecretCommand(
+      `process.stdout.write(${JSON.stringify(`API_SERVER_KEY=${value}\n`)});`,
+    ),
+  );
+}
 
 async function freshConfig(
   home: string,
@@ -45,7 +71,7 @@ describe("getApiServerKey secrets-provider overlay", () => {
       [
         "secrets:",
         "  provider: command",
-        "  command: echo API_SERVER_KEY=from-vault",
+        `  command: ${emitApiServerKey("from-vault")}`,
         "",
       ].join("\n"),
     );
@@ -74,7 +100,7 @@ describe("getApiServerKey secrets-provider overlay", () => {
       [
         "secrets:",
         "  provider: command",
-        "  command: echo API_SERVER_KEY=from-vault",
+        `  command: ${emitApiServerKey("from-vault")}`,
         "",
       ].join("\n"),
     );
@@ -90,7 +116,7 @@ describe("getApiServerKey secrets-provider overlay", () => {
       [
         "secrets:",
         "  provider: command",
-        "  command: echo API_SERVER_KEY=from-vault",
+        `  command: ${emitApiServerKey("from-vault")}`,
         "",
       ].join("\n"),
     );

@@ -29,20 +29,11 @@ import Schedules from "../Schedules/Schedules";
 import Kanban from "../Kanban/Kanban";
 import RemoteNotice from "../../components/RemoteNotice";
 import VerifyWarningBanner from "../../components/VerifyWarningBanner";
-import hermeslogo from "../../assets/hermes-one.svg";
 import {
   ChatBubble,
   Clock,
-  Compass,
   Settings as SettingsIcon,
-  Brain,
-  Wrench,
-  Signal,
   Building,
-  Layers,
-  KeyRound,
-  Timer,
-  Kanban as KanbanIcon,
   Download,
   PanelLeftClose,
   PanelLeftOpen,
@@ -69,21 +60,9 @@ type View =
   | "settings";
 
 const NAV_ITEMS: { view: View; icon: LucideIcon; labelKey: string }[] = [
+  { view: "office", icon: Building, labelKey: "navigation.office" },
   { view: "chat", icon: ChatBubble, labelKey: "navigation.chat" },
   { view: "sessions", icon: Clock, labelKey: "navigation.sessions" },
-  { view: "discover", icon: Compass, labelKey: "navigation.discover" },
-  // "agents" (Profiles) is reached from the sidebar-footer ProfileSwitcher's
-  // "Manage profiles" action rather than a top-level nav item.
-  { view: "office", icon: Building, labelKey: "navigation.office" },
-  { view: "kanban", icon: KanbanIcon, labelKey: "navigation.kanban" },
-  { view: "models", icon: Layers, labelKey: "navigation.models" },
-  { view: "providers", icon: KeyRound, labelKey: "navigation.providers" },
-  // "skills" lives under the Discover tab (installed + community), so it's no
-  // longer a top-level nav item.
-  { view: "memory", icon: Brain, labelKey: "navigation.memory" },
-  { view: "tools", icon: Wrench, labelKey: "navigation.tools" },
-  { view: "schedules", icon: Timer, labelKey: "navigation.schedules" },
-  { view: "gateway", icon: Signal, labelKey: "navigation.gateway" },
   { view: "settings", icon: SettingsIcon, labelKey: "navigation.settings" },
 ];
 
@@ -102,7 +81,7 @@ function Layout({
   onDismissVerifyWarning,
 }: LayoutProps = {}): React.JSX.Element {
   const { t } = useI18n();
-  const [view, setView] = useState<View>("chat");
+  const [view, setView] = useState<View>("office");
   // Multiple conversations coexist (background sessions + multi-agent). Each is
   // a ChatRun; all are mounted, only the active one is shown. `activeProfile`
   // tracks the selected profile and always equals the active run's profile.
@@ -188,7 +167,7 @@ function Layout({
   // Tabs lazy-mount on first visit, then stay mounted (display:none toggle).
   // Keeps IPC refetch / DOM rebuild off the tab-switch hot path.
   const [visitedViews, setVisitedViews] = useState<Set<View>>(
-    () => new Set<View>(["chat"]),
+    () => new Set<View>(["office"]),
   );
   // Remote-only mode — SSH tunnel has full access; only pure HTTP remote mode restricts screens
   const [remoteMode, setRemoteMode] = useState(false);
@@ -480,15 +459,18 @@ function Layout({
     <div className={`layout ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span
-            className="sidebar-logo"
-            role="img"
-            aria-label="Hermes"
-            style={{
-              maskImage: `url(${hermeslogo})`,
-              WebkitMaskImage: `url(${hermeslogo})`,
-            }}
-          />
+          <div
+            className="sidebar-brand-wordmark"
+            aria-label={t("common.appName")}
+          >
+            <span className="sidebar-brand-mark">牧</span>
+            <span className="sidebar-brand-copy">
+              <span className="sidebar-brand-name">{t("common.appName")}</span>
+              <span className="sidebar-brand-subtitle">
+                {t("office.subtitle")}
+              </span>
+            </span>
+          </div>
           <button
             className="sidebar-collapse-toggle"
             type="button"
@@ -685,7 +667,12 @@ function Layout({
 
         {visitedViews.has("office") && (
           <div style={paneStyle("office")}>
-            <Office profile={activeProfile} visible={view === "office"} />
+            <Office
+              profile={activeProfile}
+              visible={view === "office"}
+              onOpenView={(target) => goTo(target)}
+              onNewChat={handleNewChat}
+            />
           </div>
         )}
 

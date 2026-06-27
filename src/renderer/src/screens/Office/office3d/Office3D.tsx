@@ -1,4 +1,11 @@
-import { Suspense, useCallback, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Canvas, type ThreeEvent } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { configureTextBuilder } from "troika-three-text";
@@ -16,11 +23,24 @@ import {
 } from "./objects/OfficeShell";
 import { Workstations, FurniturePieces } from "./objects/furniture";
 import { AgentsLayer } from "./objects/AgentsLayer";
-import { buildWorkstations, REST_FURNITURE, EXECUTIVE_DECOR } from "./layout";
-import { DAY_PALETTE } from "./core/palette";
+import { SceneInteractables } from "./objects/SceneInteractables";
+import {
+  buildWorkstations,
+  REST_FURNITURE,
+  EXECUTIVE_DECOR,
+  MANAGER_OFFICE_FURNITURE,
+} from "./layout";
+import { getWorldPalette } from "./core/palette";
 import { BANK_X, BANK_Z, SHOWROOM_X, SHOWROOM_Z } from "./core/cityPlan";
-import type { OfficeAgent } from "./core/types";
+import type { OfficeAgent, OfficeAgentTask, RenderAgent } from "./core/types";
+import { buildWorldSceneState } from "./core/worldState";
+import { FirstPersonSystem } from "./firstPerson/FirstPersonSystem";
+import type {
+  FirstPersonHudState,
+  HeldItemKind,
+} from "./firstPerson/types";
 import officeFontUrl from "../../../assets/fonts/Manrope-Medium.ttf";
+import type { AgentBehaviorIntent } from "./core/agentBehavior";
 
 // drei's <Text> (agent nameplates / speech bubbles, via troika) defaults to two
 // behaviours the renderer's strict CSP (`script-src`/`default-src 'self'`)
@@ -36,6 +56,7 @@ configureTextBuilder({ useWorker: false, defaultFontURL: officeFontUrl });
 // unrelated re-render (e.g. an agent status poll). (Value is the office's north
 // side — was BANK_Z / 2 when the bank sat north, pinned after it moved east.)
 const CAMERA_TARGET: [number, number, number] = [0, 0, -14.6];
+type CameraMode = "firstPerson" | "orbit";
 
 /**
  * The native, in-renderer 3D office. Replaces the old webview that pointed at a
@@ -46,14 +67,57 @@ export default function Office3D({
   agents,
   selectedId,
   onSelectAgent,
+  currentModel,
+  currentProvider,
+  gatewayOnline,
+  onOpenView,
+  onStartChat,
+  onAgentInteract,
+  onOpenAgentTask,
+  agentTaskById,
+  agentBehaviorById,
+  onToggleEngine,
+  onSceneMissed,
+  cameraMode,
+  firstPersonInputEnabled = true,
+  firstPersonSelectedItemRequest,
+  onFirstPersonHudChange,
   devMode = false,
   onDevLog,
+  onReady,
 }: {
   agents: OfficeAgent[];
   selectedId: string | null;
   onSelectAgent: (id: string | null) => void;
+  currentModel: string;
+  currentProvider: string;
+  gatewayOnline: boolean;
+  onOpenView: (
+    view:
+      | "chat"
+      | "models"
+      | "kanban"
+      | "memory"
+      | "skills"
+      | "tools"
+      | "schedules"
+      | "gateway"
+      | "settings",
+  ) => void;
+  onStartChat: () => void;
+  onAgentInteract: (id: string) => void;
+  onOpenAgentTask: (id: string) => void;
+  agentTaskById: Record<string, OfficeAgentTask>;
+  agentBehaviorById?: Record<string, AgentBehaviorIntent>;
+  onToggleEngine: () => void;
+  onSceneMissed?: () => void;
+  cameraMode: CameraMode;
+  firstPersonInputEnabled?: boolean;
+  firstPersonSelectedItemRequest?: { item: HeldItemKind; tick: number };
+  onFirstPersonHudChange?: (patch: Partial<FirstPersonHudState>) => void;
   devMode?: boolean;
   onDevLog?: (msg: string) => void;
+  onReady?: () => void;
 }): React.JSX.Element {
   // Clicking the selected agent again clears the selection. Memoized so agent
   // status polling (which re-renders Office3D with a new `agents` array but an
@@ -66,10 +130,10 @@ export default function Office3D({
     [selectedId, onSelectAgent],
   );
 
-  const handlePointerMissed = useCallback(
-    (): void => onSelectAgent(null),
-    [onSelectAgent],
-  );
+  const handlePointerMissed = useCallback((): void => {
+    onSelectAgent(null);
+    onSceneMissed?.();
+  }, [onSelectAgent, onSceneMissed]);
 
   // The building-mover is a dev-only authoring aid. `import.meta.env.DEV` is a
   // build-time literal (Vite replaces it: `true` in `electron-vite dev`,
@@ -204,8 +268,25 @@ export default function Office3D({
       ),
     [agents, ceoId],
   );
+  const [deskSeatedAgentIds, setDeskSeatedAgentIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const liveAgentsRef = useRef<RenderAgent[]>([]);
+  const handleDeskSeatedAgentsChange = useCallback((ids: Set<string>): void => {
+    setDeskSeatedAgentIds(new Set(ids));
+  }, []);
 
-  const palette = DAY_PALETTE;
+  const [worldNowMs, setWorldNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const sync = (): void => setWorldNowMs(Date.now());
+    sync();
+    const timer = window.setInterval(sync, 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const world = useMemo(() => buildWorldSceneState(worldNowMs), [worldNowMs]);
+  const palette = useMemo(() => getWorldPalette(world), [world]);
 
   return (
     <Canvas
@@ -220,31 +301,31 @@ export default function Office3D({
         toneMapping: THREE.ACESFilmicToneMapping,
         toneMappingExposure: 1.05,
       }}
+      onCreated={() => {
+        window.requestAnimationFrame(() => onReady?.());
+      }}
       onPointerMissed={handlePointerMissed}
+      className="aimashi-office-canvas"
       style={{ width: "100%", height: "100%" }}
     >
-      <SceneEnvironment palette={palette} />
+      <SceneEnvironment palette={palette} world={world} />
       <DistantSkyline />
       <CityBackdrop
+        world={world}
         devMode={import.meta.env.DEV && devMode}
         moved={import.meta.env.DEV && devMode ? devPos : undefined}
         onPick={import.meta.env.DEV && devMode ? pickBackdrop : undefined}
       />
       <Suspense fallback={null}>
-        <TrafficLayer />
+        <TrafficLayer world={world} />
       </Suspense>
       <ConnectingStreet />
-      <Room palette={palette} />
+      <Room palette={palette} world={world} liveAgentsRef={liveAgentsRef} />
       <InteriorWalls palette={palette} />
-      {/* CEO glass corner office — only exists when there is a CEO. */}
-      {ceoId && (
-        <>
-          <GlassWalls />
-          <Suspense fallback={null}>
-            <CeoOfficeExtras />
-          </Suspense>
-        </>
-      )}
+      <GlassWalls liveAgentsRef={liveAgentsRef} />
+      <Suspense fallback={null}>
+        <CeoOfficeExtras />
+      </Suspense>
       {import.meta.env.DEV && devMode ? (
         <>
           <group onClick={pickLandmark(LANDMARKS.bank)}>
@@ -273,43 +354,78 @@ export default function Office3D({
         </>
       )}
       <Suspense fallback={null}>
-        <Workstations workstations={workstations} />
+        <Workstations
+          workstations={workstations}
+          agents={agents}
+          deskSeatedAgentIds={deskSeatedAgentIds}
+          agentTaskById={agentTaskById}
+          agentBehaviorById={agentBehaviorById}
+          onOpenAgentTask={onOpenAgentTask}
+        />
         <FurniturePieces pieces={REST_FURNITURE} />
-        {ceoId && <FurniturePieces pieces={EXECUTIVE_DECOR} />}
+        <FurniturePieces
+          pieces={
+            ceoId
+              ? EXECUTIVE_DECOR
+              : [...MANAGER_OFFICE_FURNITURE, ...EXECUTIVE_DECOR]
+          }
+        />
       </Suspense>
+      <SceneInteractables
+        currentModel={currentModel}
+        currentProvider={currentProvider}
+        directPointerEnabled={cameraMode !== "firstPerson"}
+        gatewayOnline={gatewayOnline}
+        onOpenView={onOpenView}
+        onStartChat={onStartChat}
+        onToggleEngine={onToggleEngine}
+      />
       <AgentsLayer
         agents={agents}
         workstations={workstations}
         selectedId={selectedId}
         onSelect={handleSelect}
+        onInteract={onAgentInteract}
+        agentBehaviorById={agentBehaviorById}
+        onDeskSeatedAgentsChange={handleDeskSeatedAgentsChange}
+        liveAgentsRef={liveAgentsRef}
       />
-      <OrbitControls
-        ref={controlsRef}
-        makeDefault
-        enablePan
-        // Inertial damping: motion eases out instead of stopping dead, which
-        // is most of the "controllable" feel.
-        enableDamping
-        dampingFactor={0.08}
-        // Gentler speeds — the raw defaults feel twitchy over a city-sized
-        // scene, especially zoom (multiplicative per wheel tick).
-        rotateSpeed={0.75}
-        panSpeed={0.9}
-        zoomSpeed={0.65}
-        // Map-style panning: dragging slides along the ground plane at
-        // constant height, instead of moving with the screen axes.
-        screenSpacePanning={false}
-        // Scrolling dives toward whatever the cursor points at — point at
-        // the bank or showroom and scroll to fly there.
-        zoomToCursor
-        minDistance={5}
-        maxDistance={130}
-        maxPolarAngle={Math.PI / 2.15}
-        // Stable module-level reference — see CAMERA_TARGET above. A fresh
-        // array here would reset the controls' target and wipe any user pan.
-        target={CAMERA_TARGET}
-        onChange={clampControlsTarget}
-      />
+      {cameraMode === "firstPerson" ? (
+        <FirstPersonSystem
+          inputEnabled={firstPersonInputEnabled}
+          onSceneMissed={handlePointerMissed}
+          onHudStateChange={onFirstPersonHudChange}
+          selectedItemRequest={firstPersonSelectedItemRequest}
+        />
+      ) : (
+        <OrbitControls
+          ref={controlsRef}
+          makeDefault
+          enablePan
+          // Inertial damping: motion eases out instead of stopping dead, which
+          // is most of the "controllable" feel.
+          enableDamping
+          dampingFactor={0.08}
+          // Gentler speeds — the raw defaults feel twitchy over a city-sized
+          // scene, especially zoom (multiplicative per wheel tick).
+          rotateSpeed={0.75}
+          panSpeed={0.9}
+          zoomSpeed={0.65}
+          // Map-style panning: dragging slides along the ground plane at
+          // constant height, instead of moving with the screen axes.
+          screenSpacePanning={false}
+          // Scrolling dives toward whatever the cursor points at — point at
+          // the bank or showroom and scroll to fly there.
+          zoomToCursor
+          minDistance={5}
+          maxDistance={130}
+          maxPolarAngle={Math.PI / 2.15}
+          // Stable module-level reference — see CAMERA_TARGET above. A fresh
+          // array here would reset the controls' target and wipe any user pan.
+          target={CAMERA_TARGET}
+          onChange={clampControlsTarget}
+        />
+      )}
     </Canvas>
   );
 }

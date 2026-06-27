@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Microsoft Rocketbox Avatar Library",
+    "copyright": "Copyright (c) 2020 Microsoft",
+    "license": "MIT",
+    "source": "https://github.com/microsoft/Microsoft-Rocketbox",
+    "localLicense": "rocketbox/LICENSE.md",
+    "usage": "Office3D humanoid agent avatar and office animation POC"
+  },
+  {
+    "name": "Quaternius Universal Animation Library",
+    "copyright": "Models by Quaternius",
+    "license": "CC0 1.0 Universal",
+    "source": "https://quaternius.com/packs/universalanimationlibrary.html",
+    "localLicense": "quaternius/universal-animation-library/License.txt",
+    "usage": "Avatar Lab isolated humanoid animation preview POC"
+  },
+  {
+    "name": "Quaternius Universal Animation Library 2",
+    "copyright": "Models by Quaternius",
+    "license": "CC0 1.0 Universal",
+    "source": "https://quaternius.itch.io/universal-animation-library-2",
+    "localLicense": "quaternius/universal-animation-library-2/License.txt",
+    "usage": "Avatar Lab isolated humanoid animation preview POC"
+  }
+]

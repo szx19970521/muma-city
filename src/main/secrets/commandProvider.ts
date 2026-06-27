@@ -142,13 +142,9 @@ export function parseSecretOutput(
  *     helper at most once); it is NEVER called per-key in a loop, so a helper
  *     that blocks (e.g. on a vault unlock prompt) can't be spawned dozens of
  *     times for one message.
- *   - PLATFORM: resolution runs the helper via `/bin/sh -c`, so the `command`
- *     provider is POSIX-only (Linux/macOS). On Windows there is no `/bin/sh`;
- *     the helper would fail to spawn and every key degrades to null (logged).
- *     This is acceptable because the feature targets the vault/tmpfs workflow on
- *     Linux; Windows users stay on the default `env` provider. A future change
- *     could detect the platform and use `cmd /c`/PowerShell, but that is out of
- *     scope for this opt-in provider.
+ *   - PLATFORM: resolution runs the helper through the platform shell
+ *     (`/bin/sh -c` on POSIX, `cmd.exe /d /s /c` on Windows) so the provider is
+ *     usable in Windows dev/test environments without requiring Git Bash/WSL.
  */
 /**
  * Spawn options shared by get() and list() — exported so the F6 regression
@@ -172,6 +168,22 @@ export function helperExecOptions(
   };
 }
 
+export function helperShellInvocation(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): {
+  file: string;
+  args: string[];
+} {
+  if (platform === "win32") {
+    return {
+      file: process.env.ComSpec || process.env.COMSPEC || "cmd.exe",
+      args: ["/d", "/s", "/c", command],
+    };
+  }
+  return { file: "/bin/sh", args: ["-c", command] };
+}
+
 export class CommandSecretsProvider implements SecretsProvider {
   readonly id = "command";
 
@@ -184,9 +196,10 @@ export class CommandSecretsProvider implements SecretsProvider {
     const command = this.command(profile);
     if (!command) return null;
     try {
+      const shell = helperShellInvocation(command);
       const stdout = execFileSync(
-        "/bin/sh",
-        ["-c", command],
+        shell.file,
+        shell.args,
         helperExecOptions(key),
       );
       return parseSecretOutput(stdout, key);
@@ -217,9 +230,10 @@ export class CommandSecretsProvider implements SecretsProvider {
     const command = this.command(profile);
     if (!command) return {};
     try {
+      const shell = helperShellInvocation(command);
       const stdout = execFileSync(
-        "/bin/sh",
-        ["-c", command],
+        shell.file,
+        shell.args,
         helperExecOptions(""),
       );
       const out: Record<string, string> = {};

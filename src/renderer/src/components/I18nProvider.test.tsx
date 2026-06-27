@@ -3,10 +3,13 @@ import { vi } from "vitest";
 import {
   DEFAULT_ACTIVE_LOCALE,
   setLocale as setSharedLocale,
+  t as sharedT,
   type AppLocale,
 } from "../../../shared/i18n";
 import { I18nProvider } from "./I18nProvider";
 import { useI18n } from "./useI18n";
+
+const zhCnWelcome = sharedT("welcome.title", "zh-CN");
 
 function Probe(): React.JSX.Element {
   const { t } = useI18n();
@@ -57,7 +60,7 @@ describe("I18nProvider", () => {
     }
   });
 
-  it("renders English translations by default", async () => {
+  it("renders zh-CN translations by default", async () => {
     await act(async () => {
       render(
         <I18nProvider>
@@ -66,7 +69,7 @@ describe("I18nProvider", () => {
       );
     });
 
-    expect(await screen.findByText("Welcome to Hermes")).toBeInTheDocument();
+    expect(await screen.findByText(zhCnWelcome)).toBeInTheDocument();
   });
 
   it("renders Spanish translations after switching locale", async () => {

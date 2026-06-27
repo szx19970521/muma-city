@@ -16,6 +16,7 @@ import { useI18n } from "../../components/useI18n";
 interface KanbanProps {
   profile?: string;
   visible?: boolean;
+  focusTaskId?: string | null;
 }
 
 interface KanbanTask {
@@ -136,7 +137,11 @@ function ageLabel(createdAt: number | null): string {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
-function Kanban({ profile, visible }: KanbanProps): React.JSX.Element {
+function Kanban({
+  profile,
+  visible,
+  focusTaskId,
+}: KanbanProps): React.JSX.Element {
   const { t } = useI18n();
   const [boards, setBoards] = useState<KanbanBoard[]>([]);
   const [tasks, setTasks] = useState<KanbanTask[]>([]);
@@ -268,6 +273,10 @@ function Kanban({ profile, visible }: KanbanProps): React.JSX.Element {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    if (focusTaskId) setDetailTaskId(focusTaskId);
+  }, [focusTaskId]);
 
   // Persist the user's board choice across reloads. Skip the initial null
   // state (= "not yet decided") so we don't overwrite a previously-stored
