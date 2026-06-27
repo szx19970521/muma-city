@@ -4,17 +4,17 @@
 //
 // Built deliberately small to avoid pulling js-yaml into the main bundle for
 // a one-line lookup. Hermes config.yaml is plain key: value pairs nested by
-// indentation — no anchors, no merge keys, no multi-line scalars in the
-// fields we read. Edge cases we DO handle:
+// indentation: no anchors, no merge keys, no multi-line scalars in the fields
+// we read. Edge cases we DO handle:
 //
 //  - 2-or-more-space indentation (Hermes always uses 2 today, but any
 //    consistent positive indent works).
-//  - Inline empty maps:  `providers: {}`  → returns "{}"
-//    Inline empty lists: `disabled_toolsets: []` → returns "[]"
-//  - Single/double-quoted scalars: `provider: 'honcho'` → "honcho"
-//  - Trailing line comments: `model: gpt-4  # default` → "gpt-4"
+//  - Inline empty maps:  `providers: {}` returns "{}"
+//    Inline empty lists: `disabled_toolsets: []` returns "[]"
+//  - Single/double-quoted scalars: `provider: 'honcho'` returns "honcho"
+//  - Trailing line comments: `model: gpt-4  # default` returns "gpt-4"
 //
-// Edge cases we DON'T attempt — fall back to null:
+// Edge cases we DON'T attempt - fall back to null:
 //
 //  - Block scalars (`|`, `>`)
 //  - Flow-style mappings with content (`{a: 1, b: 2}`)
@@ -38,7 +38,7 @@ export function getYamlPath(content: string, dottedKey: string): string | null {
     if (!trimmed || trimmed.startsWith("#")) continue;
 
     const indent = raw.length - trimmed.length;
-    // Pop stack frames whose indent is >= the current line's indent — those
+    // Pop stack frames whose indent is >= the current line's indent; those
     // are siblings/cousins of the current node, not parents.
     while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
       stack.pop();
@@ -46,7 +46,7 @@ export function getYamlPath(content: string, dottedKey: string): string | null {
     // If we've already drilled into a deeper level than where the current
     // pathIdx parent lives, the dotted path is broken (we walked past it
     // without finding the next part), so reset pathIdx to the depth we are
-    // actually at — i.e. number of parts already matched in stack.
+    // actually at: number of parts already matched in stack.
     pathIdx = stack.length;
 
     const colon = trimmed.indexOf(":");
@@ -63,7 +63,7 @@ export function getYamlPath(content: string, dottedKey: string): string | null {
       if (isLeaf) {
         return parseScalar(remainder);
       }
-      // Intermediate key — push onto the stack and look for the next part
+      // Intermediate key: push onto the stack and look for the next part
       // among its children.
       stack.push({ indent, key });
       pathIdx = stack.length;
@@ -84,24 +84,62 @@ function stripQuotes(s: string): string {
 }
 
 function parseScalar(remainderAfterColon: string): string | null {
-  // Strip a trailing `# comment` segment only when not inside quotes. The
-  // simplest approximation: if the value starts with a quote, find the
-  // matching close-quote and ignore anything after it; otherwise split on
-  // the first ` #` we encounter.
+  // Strip a trailing `# comment` segment only when not inside quotes. If the
+  // value starts with a quote, scan the quoted scalar; otherwise split on the
+  // first ` #` we encounter.
   let value = remainderAfterColon.trimStart();
   if (value === "") {
-    // `key:` with no inline value means the value is a child map — not what
-    // a getter on this key expects.
+    // `key:` with no inline value means the value is a child map, not what a
+    // getter on this key expects.
     return null;
   }
   if (value.startsWith('"') || value.startsWith("'")) {
-    const quote = value[0];
-    const end = value.indexOf(quote, 1);
-    if (end > 0) value = value.slice(1, end);
-    else value = value.slice(1); // unterminated — best effort
+    value = parseQuotedScalar(value);
   } else {
     const commentIdx = value.search(/\s+#/);
     if (commentIdx >= 0) value = value.slice(0, commentIdx);
   }
   return value.trim();
+}
+
+function parseQuotedScalar(value: string): string {
+  const quote = value[0];
+  let parsed = "";
+
+  for (let i = 1; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === quote) {
+      if (quote === "'" && value[i + 1] === "'") {
+        parsed += "'";
+        i++;
+        continue;
+      }
+      return parsed;
+    }
+    if (quote === '"' && ch === "\\" && i + 1 < value.length) {
+      parsed += decodeDoubleQuotedEscape(value[++i]);
+      continue;
+    }
+    parsed += ch;
+  }
+
+  // Unterminated quote: preserve the previous best-effort behavior.
+  return parsed;
+}
+
+function decodeDoubleQuotedEscape(ch: string): string {
+  switch (ch) {
+    case "n":
+      return "\n";
+    case "r":
+      return "\r";
+    case "t":
+      return "\t";
+    case '"':
+      return '"';
+    case "\\":
+      return "\\";
+    default:
+      return ch;
+  }
 }
