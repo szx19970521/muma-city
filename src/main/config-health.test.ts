@@ -38,11 +38,11 @@ vi.mock("fs", async () => {
 });
 
 vi.mock("./utils", () => ({
-  profileHome: vi.fn(() => "/fake/home/.hermes"),
+  profileHome: vi.fn(() => `${process.cwd()}/.vitest-config-health-home`),
   profilePaths: vi.fn((profile?: string) => ({
-    home: "/fake/home/.hermes",
-    envFile: "/fake/home/.hermes/.env",
-    configFile: "/fake/home/.hermes/config.yaml",
+    home: `${process.cwd()}/.vitest-config-health-home`,
+    envFile: `${process.cwd()}/.vitest-config-health-home/.env`,
+    configFile: `${process.cwd()}/.vitest-config-health-home/config.yaml`,
     profile: profile || "default",
   })),
   safeWriteFile: vi.fn(),
@@ -111,6 +111,7 @@ import { runConfigHealthCheck } from "./config-health";
 // above) — imported so a precedence test can assert the merge WINNER directly,
 // not just key presence (Greptile #650 / AIR-008).
 import { resolvedSecretMap } from "./secrets";
+import { mkdirSync, rmSync, writeFileSync } from "fs";
 
 const mockedReadEnv = vi.mocked(readEnv);
 const mockedGetConfigValue = vi.mocked(getConfigValue);
@@ -119,6 +120,7 @@ const mockedCustomEndpointKeyResolvable = vi.mocked(
   customEndpointKeyResolvable,
 );
 const mockedHasOAuthCredentials = vi.mocked(hasOAuthCredentials);
+const TEST_HOME = `${process.cwd()}/.vitest-config-health-home`;
 const CREDENTIAL_ENV_KEYS = [
   "API_SERVER_KEY",
   "NANO_GPT_API_KEY",
@@ -130,6 +132,10 @@ const CREDENTIAL_ENV_KEYS = [
 
 describe("config-health audit — vault awareness", () => {
   beforeEach(() => {
+    rmSync(TEST_HOME, { recursive: true, force: true });
+    mkdirSync(TEST_HOME, { recursive: true });
+    writeFileSync(`${TEST_HOME}/config.yaml`, "agent:\n  enabled: true\n");
+
     for (const k of CREDENTIAL_ENV_KEYS) {
       delete process.env[k];
     }
@@ -159,6 +165,8 @@ describe("config-health audit — vault awareness", () => {
   });
 
   afterEach(() => {
+    rmSync(TEST_HOME, { recursive: true, force: true });
+
     // Don't leak process.env from one test to the next.
     for (const k of CREDENTIAL_ENV_KEYS) {
       delete process.env[k];
